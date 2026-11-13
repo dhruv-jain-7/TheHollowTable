@@ -377,3 +377,128 @@ h1, h2, h3, p { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+
+
+/* THE HOLLOW TABLE — CINEMATIC UPDATE */
+.game-layout { max-width: 1480px; margin: 0 auto; padding-top: 22px; }
+.game-topline { margin-bottom: 16px; }
+.room-pill, .round-pill { border-radius: 4px; background: rgba(24,13,14,.72); }
+.phase-clock { border-left-color: rgba(164,59,55,.45); }
+.phase-clock strong { font-family: var(--gothic); font-weight: 700; font-size: 24px; text-shadow: 0 0 18px rgba(159,43,45,.25); }
+.game-heading { margin-bottom: 17px; }
+.game-heading h1 { font-size: clamp(34px, 4vw, 49px); text-shadow: 0 8px 30px rgba(0,0,0,.8); }
+.game-heading p { color: #c0aa9d; font: 16px/1.45 'IM Fell English', Georgia, serif; }
+.game-main-grid { grid-template-columns: minmax(0, 1.7fr) minmax(310px, .72fr); gap: 20px; }
+.table-stage { height: clamp(590px, 66vw, 760px); min-height: 590px; max-height: 760px; border-radius: 12px; border-color: rgba(133,48,50,.42); background: radial-gradient(ellipse at 50% 60%, rgba(108,23,28,.24), transparent 48%), linear-gradient(180deg, rgba(5,5,7,.3), rgba(5,4,5,.94)), radial-gradient(ellipse at 50% 52%, #211b1b, #090809 78%); box-shadow: inset 0 0 100px rgba(0,0,0,.84), 0 24px 65px rgba(0,0,0,.58); }
+.table-stage::before { inset: 15px; border: 1px solid rgba(190,139,108,.15); border-radius: 9px; }
+.table-stage::after { inset: auto 7% 4%; height: 20%; border: 0; border-radius: 50%; background: radial-gradient(ellipse, rgba(0,0,0,.8), transparent 70%); filter: blur(13px); }
+.haunted-mansion { position: absolute; inset: 0; z-index: 0; opacity: .46; pointer-events: none; }
+.haunted-mansion svg { width: 100%; height: 100%; }
+.table-haze { z-index: 1; opacity: .75; }
+.seat-ring { z-index: 4; }
+.seat { width: 110px; z-index: 4; }
+.seat-avatar { width: 62px; height: 62px; border: 1px solid rgba(193,153,128,.5); background: radial-gradient(circle at 35% 25%, #51403b, #171112 70%); font-size: 29px; box-shadow: 0 9px 25px rgba(0,0,0,.65), 0 0 0 4px rgba(0,0,0,.34), inset 0 0 18px rgba(0,0,0,.4); }
+.seat-you .seat-avatar { border-color: #d1a16c; box-shadow: 0 0 0 3px rgba(209,161,108,.16), 0 0 27px rgba(209,161,108,.26); }
+.seat-targetable:hover .seat-avatar { border-color: #df6a61; box-shadow: 0 0 0 4px rgba(190,49,48,.16), 0 0 35px rgba(190,49,48,.4); }
+.seat-name { width: 128px; margin-top: 9px; padding: 6px 8px; border: 1px solid rgba(171,113,94,.3); border-radius: 3px; color: #f0ded1; background: linear-gradient(180deg, rgba(22,13,14,.96), rgba(7,6,7,.96)); font: 600 12px/1.3 var(--gothic); letter-spacing: .055em; text-shadow: 0 2px 7px #000; box-shadow: 0 7px 16px rgba(0,0,0,.38); }
+.seat-role { display: none; }
+.seat-dead .seat-name { color: #a18a83; }
+.round-table { width: 46%; height: 39%; min-width: 270px; min-height: 210px; border-width: 12px; border-color: #291719; outline-color: rgba(177,91,82,.58); background: radial-gradient(ellipse at 50% 30%, #55322d, #281719 68%, #100b0c); box-shadow: 0 0 0 4px rgba(0,0,0,.65), 0 0 0 8px rgba(155,63,61,.12), inset 0 0 0 2px rgba(205,147,119,.23), inset 0 0 55px rgba(0,0,0,.92), 0 24px 50px rgba(0,0,0,.8); z-index: 2; }
+.table-name { color: #d0a58a; font-size: clamp(15px, 1.65vw, 22px); letter-spacing: .22em; text-shadow: 0 0 20px rgba(167,62,58,.24), 0 3px 10px #000; }
+.table-name em { color: #efcbb0; }
+.table-center-caption, .table-floor-label, .game-bottom-bar { display: none; }
+.game-sidebar { gap: 15px; }
+.game-sidebar .panel { border-radius: 9px; border-color: rgba(152,75,69,.26); background: linear-gradient(145deg, rgba(23,15,16,.97), rgba(9,8,9,.98)); box-shadow: 0 18px 48px rgba(0,0,0,.45), inset 0 1px rgba(255,255,255,.025); }
+.role-panel, .action-panel, .waiting-panel, .chat-panel { padding: 22px; }
+.role-panel h2 { font-size: 22px; color: #f0d9c9; }
+.role-panel > p { font-size: 15px; color: #b9a79b; }
+.action-panel h3 { color: #f1ddd0; font-size: 18px; line-height: 1.35; }
+.action-subtext { color: #c4a99d; font: 14px/1.45 'IM Fell English', Georgia, serif; margin: 0 0 13px; }
+.target-list { gap: 8px; max-height: 280px; }
+.target-option { min-height: 48px; padding: 8px 12px; border-radius: 4px; border-color: rgba(163,105,88,.26); background: rgba(4,4,5,.55); color: #e0d0c3; font: 14px 'IM Fell English', Georgia, serif; }
+.target-option:hover, .target-option.chosen { border-color: rgba(209,95,84,.72); background: rgba(105,29,32,.32); color: #fff0e6; }
+.target-avatar { width: 32px; height: 32px; background: #28191a; }
+.action-panel .primary-button { min-height: 48px; border-radius: 3px; font-size: 10px; }
+.identity-wrap { display: flex; flex-direction: column; gap: 9px; }
+.identity-toggle { width: 100%; min-height: 46px; display: flex; justify-content: center; align-items: center; gap: 10px; border: 1px solid rgba(178,101,84,.48); border-radius: 4px; color: #ead4c3; background: linear-gradient(110deg, rgba(55,22,23,.96), rgba(21,13,14,.96)); font: 600 11px var(--gothic); letter-spacing: .12em; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.identity-toggle:hover { border-color: #c77a67; background: linear-gradient(110deg, #562326, #211416); }
+.identity-toggle span { color: #d78370; font-size: 17px; }
+.mafia-coordination { margin-top: 13px; padding-top: 11px; border-top: 1px solid rgba(173,82,75,.22); }
+.mafia-coordination > div { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0; color: #d5c3b8; font: 13px 'IM Fell English', Georgia, serif; }
+.mafia-coordination strong { color: #dc998a; font: 10px var(--mono); text-align: right; }
+.mafia-coordination p { margin: 9px 0 0; color: #d48a7d; font: 9px var(--mono); letter-spacing: .06em; }
+.ready-vote-card { max-width: 610px; margin: 0 auto 18px; padding: 11px 15px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid rgba(175,91,79,.3); border-radius: 5px; background: linear-gradient(100deg, rgba(36,15,17,.92), rgba(11,9,10,.94)); box-shadow: 0 12px 32px rgba(0,0,0,.25); }
+.ready-vote-count { color: #f0d8ca; font: 700 18px var(--gothic); }
+.ready-vote-count span { margin-left: 6px; color: #a99184; font: 9px var(--mono); letter-spacing: .1em; }
+.ready-button { min-height: 38px; padding: 0 15px; border: 1px solid rgba(191,107,91,.55); border-radius: 3px; color: #f0ddd1; background: rgba(93,29,31,.72); font: 10px var(--gothic); letter-spacing: .1em; }
+.ready-button.is-ready { color: #e8d6ba; border-color: rgba(180,158,111,.65); background: rgba(65,57,35,.66); }
+.announcement { max-width: 1100px; padding: 19px 22px; border-radius: 5px; border-color: rgba(167,67,65,.42); background: linear-gradient(110deg, rgba(24,12,14,.97), rgba(9,8,9,.97)); }
+.announcement h2 { color: #f0d7c8; font-size: 19px; font-weight: 700; letter-spacing: .08em; }
+.announcement p { color: #cbb7aa; font: 16px/1.55 'IM Fell English', Georgia, serif; }
+.announcement .typewriter-text { font-weight: 700; }
+.chat-panel .panel-header h2 { color: #f0d9ca; font: 600 19px var(--gothic); }
+.chat-log { height: 190px; }
+.chat-message p { color: #dfd0c5; font: 15px/1.45 'IM Fell English', Georgia, serif; }
+.chat-message small { color: #c79a83; font: 10px var(--gothic); }
+.chat-form { border-radius: 4px; }
+.chat-form input { font: 15px 'IM Fell English', Georgia, serif; }
+.site-footer, .brand-lockup small, .announcement-kicker, .tiny-note, .game-bottom-bar { display: none !important; }
+.panel-kicker { color: #c3a699; font: 600 10px var(--gothic); letter-spacing: .1em; }
+.phase-clock small { color: #c0a99d; font: 10px var(--gothic); letter-spacing: .08em; }
+.lobby-bottom-note { display: none; }
+.voice-concealed { display: none !important; }
+.murder-overlay { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; overflow: hidden; pointer-events: none; background: radial-gradient(ellipse at center, rgba(39,4,8,.78), rgba(5,4,5,.92) 75%); animation: murder-screen-in .35s ease-out both, murder-screen-out .65s ease-in 3.45s both; }
+.murder-red-flash { position: absolute; inset: 0; background: rgba(198,18,28,.68); animation: murder-flash .58s ease-out both; }
+.murder-knife { position: absolute; left: calc(50% - 75px); top: calc(50% - 190px); width: 150px; filter: drop-shadow(0 18px 18px rgba(0,0,0,.85)); transform-origin: 50% 15%; animation: knife-strike 1.05s cubic-bezier(.16,.82,.23,1) both; }
+.murder-knife svg { width: 100%; height: auto; }
+.murder-blood-burst { position: absolute; left: 50%; top: 53%; width: 20px; height: 20px; border-radius: 50%; background: #8d0715; box-shadow: 0 0 0 10px rgba(132,5,18,.4), 0 0 65px 32px rgba(179,8,24,.72); animation: blood-burst 1.25s ease-out .55s both; }
+.murder-blood-burst i { position: absolute; display: block; width: 17px; height: 30px; border-radius: 60% 40% 55% 45%; background: #a50919; transform-origin: center bottom; }
+.murder-blood-burst i:nth-child(1) { transform: rotate(0deg) translateY(-60px); }
+.murder-blood-burst i:nth-child(2) { transform: rotate(52deg) translateY(-75px); }
+.murder-blood-burst i:nth-child(3) { transform: rotate(104deg) translateY(-58px); }
+.murder-blood-burst i:nth-child(4) { transform: rotate(156deg) translateY(-80px); }
+.murder-blood-burst i:nth-child(5) { transform: rotate(208deg) translateY(-61px); }
+.murder-blood-burst i:nth-child(6) { transform: rotate(260deg) translateY(-77px); }
+.murder-blood-burst i:nth-child(7) { transform: rotate(312deg) translateY(-55px); }
+.murder-reveal-text { position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 8px; width: min(92vw, 1000px); margin-top: 145px; text-align: center; opacity: 0; animation: murder-name-reveal .7s ease-out 1.2s both; }
+.murder-reveal-text span { color: #e4b8ad; font: 11px var(--mono); letter-spacing: .3em; }
+.murder-reveal-text strong { color: #ed172b; font: 900 clamp(42px, 8vw, 104px)/1 var(--gothic); letter-spacing: .035em; text-transform: uppercase; text-shadow: 0 5px 0 #3c0007, 0 0 35px rgba(235,12,35,.74), 0 15px 40px #000; overflow-wrap: anywhere; }
+.murder-reveal-text em { color: #f0d8cf; font: 700 clamp(16px, 2.5vw, 25px) var(--gothic); letter-spacing: .18em; font-style: normal; text-shadow: 0 3px 16px #000; }
+@keyframes murder-screen-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes murder-screen-out { to { opacity: 0; visibility: hidden; } }
+@keyframes murder-flash { 0% { opacity: 0; } 13% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes knife-strike { 0% { transform: translate(36vw,-110vh) rotate(-47deg) scale(1.2); } 55% { transform: translate(0,0) rotate(8deg) scale(1); } 70% { transform: translate(0,0) rotate(-3deg) scale(1.02); } 100% { transform: translate(0,-20vh) rotate(5deg) scale(.78); opacity: 0; } }
+@keyframes blood-burst { 0% { opacity: 0; transform: scale(.1); } 35% { opacity: 1; transform: scale(2.5); } 100% { opacity: .65; transform: scale(5); } }
+@keyframes murder-name-reveal { from { opacity: 0; transform: scale(.8) translateY(28px); filter: blur(7px); } to { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); } }
+@media (max-width: 1000px) {
+  .game-main-grid { grid-template-columns: minmax(0, 1.3fr) minmax(290px, .7fr); }
+  .seat { width: 90px; }
+  .seat-avatar { width: 54px; height: 54px; }
+  .seat-name { width: 108px; font-size: 10px; }
+}
+@media (max-width: 780px) {
+  .game-main-grid { grid-template-columns: 1fr; }
+  .table-stage { height: 590px; min-height: 590px; }
+  .game-sidebar { display: grid; grid-template-columns: 1fr 1fr; }
+  .chat-panel { grid-column: 1 / -1; }
+  .round-table { width: 45%; height: 35%; }
+  .ready-vote-card { margin-left: 0; margin-right: 0; }
+}
+@media (max-width: 520px) {
+  .table-stage { height: 500px; min-height: 500px; }
+  .round-table { width: 48%; height: 31%; min-width: 175px; min-height: 150px; border-width: 8px; }
+  .seat { width: 60px; }
+  .seat-avatar { width: 37px; height: 37px; font-size: 19px; }
+  .seat-name { width: 72px; padding: 4px 2px; font-size: 7px; }
+  .game-sidebar { grid-template-columns: 1fr; }
+  .chat-panel { grid-column: auto; }
+  .murder-knife { width: 105px; left: calc(50% - 52px); top: calc(50% - 145px); }
+  .murder-reveal-text { margin-top: 95px; }
+  .murder-reveal-text span { font-size: 8px; }
+  .murder-reveal-text em { letter-spacing: .1em; }
+  .ready-vote-count { font-size: 15px; }
+  .ready-button { padding: 0 10px; font-size: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .murder-overlay, .murder-red-flash, .murder-knife, .murder-blood-burst, .murder-reveal-text { animation-duration: .01ms !important; animation-delay: 0ms !important; }
+}

@@ -15,6 +15,8 @@ import {
   resolveVote,
   getWinner,
   getNightActionProgress,
+  allPlayersReady,
+  allPlayersVoted,
   canTargetSelf,
 } from './rules.js';
 
@@ -65,7 +67,7 @@ let livekitRoomService = null;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const AVATAR_IDS = new Set(['raven','skull','ghost','bat','wolf','cat','owl','spider','moth','snake','candle','rose','moon','pumpkin','key','crow','coffin','crystal','mask','poison','blackheart','eye','rose2','moon2']);
 const NIGHT_SECONDS = 55;
-const VOTE_SECONDS = 75;
+const VOTE_SECONDS = 60;
 const TIE_SECONDS = 5 * 60;
 const RECONNECT_GRACE_MS = 45_000;
 const ROOM_TTL_HOURS = 24;
@@ -114,6 +116,7 @@ function freshActions() {
     sheriffTarget: null,
     angelTarget: null,
     dayVotes: {},
+    dayReady: {},
   };
 }
 
@@ -125,34 +128,34 @@ function livingPlayers(room) {
   return room.players.filter((player) => player.alive);
 }
 
-function makeAnnouncement(kind, title, text, accent = 'red') {
-  return { id: randomUUID(), kind, title, text, accent, createdAt: Date.now() };
+function makeAnnouncement(kind, title, text, accent = 'red', extra = {}) {
+  return { id: randomUUID(), kind, title, text, accent, ...extra, createdAt: Date.now() };
 }
 
 const murderStories = [
-  (name) => `${name} was discovered beneath the cemetery gates. The earth had opened around the grave, and pale skeletal fingers had drawn a circle in the dust. By dawn, only a torn coat remained beneath the cold moon.`,
-  (name) => `A candle was still burning in ${name}'s room when the bells began to ring. The curtains moved though every window was locked. At sunrise, the room was empty, and a trail of red wax led down into the cellar.`,
-  (name) => `${name} followed a whisper through the abandoned conservatory. The glass roof shivered, the shadows gathered, and the iron door slammed shut. The house swallowed every sound that followed.`,
-  (name) => `The old grandfather clock stopped at 3:13. Behind it, the wall was covered in fresh handprints. ${name} had vanished into the passageway that was never there the night before.`,
-  (name) => `${name} was last seen beneath the rooftop gargoyles. A sudden gust extinguished every lantern. When the fog lifted, the railing was broken and the courtyard below was silent.`,
-  (name) => `The dining room was set for one extra guest. ${name}'s chair had been pulled away from the table, and a black feather rested on the plate. The servants swear they heard footsteps descending beneath the floorboards.`,
+  (name) => `${name} was found beneath the old staircase. The floorboards were wet. No one heard a thing.`,
+  (name) => `A candle burned in ${name}'s room. At dawn, the bed was empty and the locked door stood open.`,
+  (name) => `${name} followed a whisper into the cellar. The door slammed. The house went quiet.`,
+  (name) => `The clock stopped at 3:13. ${name} was gone. A fresh handprint marked the wall.`,
+  (name) => `The fog swallowed ${name} beneath the courtyard arch. Only their footsteps came back.`,
+  (name) => `${name}'s chair was empty. A dark stain crossed the floor and vanished beneath the table.`,
 ];
 
 const eliminationStories = [
-  (name) => `${name} was called to the balcony while the storm rolled over the city. A voice came from the darkness, the railing groaned, and a terrible silence followed. The table has made its judgement.`,
-  (name) => `The ballroom lights flickered as ${name} crossed the final candlelit corridor. The music warped into a funeral hymn. When the doors opened again, the ballroom was empty except for a single spinning chair.`,
-  (name) => `${name} entered the lift alone. The floor numbers went dark one by one, although the lift kept descending. The doors opened onto a sealed crypt. The table has made its judgement.`,
-  (name) => `At midnight, ${name} was led into the winter garden. The glasshouse filled with black mist, and every flower turned toward the door. No one saw ${name} return.`,
-  (name) => `${name} found a handwritten invitation beneath their glass. It read: "Your final dance awaits." The orchestra began to play in an empty hall, and one by one, the candles went out.`,
-  (name) => `The old staircase groaned beneath ${name}'s final footsteps. A shadow climbed the wall in the opposite direction. Then came a crash, a gust of cold air, and a silence no one dared break.`,
+  (name) => `${name} walked into the candlelit hall. The doors closed. The table had made its choice.`,
+  (name) => `The ballroom lights went out as ${name} entered. When they returned, the room was empty.`,
+  (name) => `The lift carried ${name} below the house. It never came back.`,
+  (name) => `Black mist filled the winter garden. ${name} did not return.`,
+  (name) => `A final invitation waited for ${name}. The music played, but no one saw them again.`,
+  (name) => `The staircase groaned. A shadow moved the wrong way. Then came silence. ${name} was gone.`,
 ];
 
 function roleDescription(role) {
   const descriptions = {
-    mafia: 'You are one of the Mafia. Each night, your team chooses one living player to murder. You may target another Mafia member, but never yourself.',
-    sheriff: 'You are the Sheriff. Each night, investigate one living player. Your result is private: Mafia or Not Mafia.',
-    angel: 'You are the Angel. Each night, protect one living player, including yourself. If the Mafia choose that player, the murder is prevented.',
-    citizen: 'You are a Citizen. Listen carefully, discuss, question, and vote to eliminate the Mafia.',
+    mafia: 'Choose one victim with your team each night. Every living Mafia member must agree on the same name.',
+    sheriff: 'Inspect one player each night. Your result is private.',
+    angel: 'Protect one player each night, including yourself. Your protection is never revealed.',
+    citizen: 'Listen, discuss, and vote to find the Mafia.',
   };
   return descriptions[role] ?? '';
 }
@@ -171,6 +174,15 @@ function makeSnapshot(room, playerId) {
         : me.role === 'angel' ? Boolean(room.actions.angelTarget) : false)
     : ['voting', 'tieVoting'].includes(room.phase) ? Object.hasOwn(room.actions.dayVotes, me.id) : false;
   const chat = room.chat.filter((message) => message.scope === 'public' || (message.scope === 'mafia' && me.role === 'mafia' && me.alive));
+  const dayReady = room.actions.dayReady ?? {};
+  const nightProgress = room.phase === 'night' ? getNightActionProgress(room) : null;
+  const mafiaChoices = me.role === 'mafia' && me.alive
+    ? room.players.filter((player) => player.alive && player.role === 'mafia').map((player) => {
+        const targetId = room.actions.mafiaVotes?.[player.id];
+        const target = targetId ? playerById(room, targetId) : null;
+        return { id: player.id, name: player.name, targetName: target?.alive ? target.name : null, submitted: Boolean(targetId) };
+      })
+    : [];
   return {
     code: room.code,
     serverNow: Date.now(),
@@ -197,6 +209,11 @@ function makeSnapshot(room, playerId) {
       const target = playerById(room, id);
       return target ? { id: target.id, name: target.name, avatar: target.avatar } : null;
     }).filter(Boolean),
+    discussionReadiness: {
+      ready: livingPlayers(room).filter((player) => dayReady[player.id]).length,
+      required: livingPlayers(room).length,
+    },
+    mafiaChoices,
     chat,
     me: {
       id: me.id,
@@ -208,16 +225,18 @@ function makeSnapshot(room, playerId) {
       connected: me.connected,
       isHost: me.id === room.hostId,
       myActionSubmitted,
+      readyToVote: Boolean(dayReady[me.id]),
       mafiaTeam,
       privateResults: me.privateResults ?? [],
     },
     actionProgress: room.phase === 'night'
       ? me.role === 'mafia' && me.alive ? {
-          submitted: Object.keys(room.actions.mafiaVotes).length,
-          required: livingPlayers(room).filter((p) => p.role === 'mafia').length,
-        } : { submitted: 0, required: 0 }
+          submitted: nightProgress.mafiaSubmitted,
+          required: nightProgress.mafiaRequired,
+          mafiaAgreed: nightProgress.mafiaDone,
+        } : { submitted: 0, required: 0, mafiaAgreed: false }
       : ['voting', 'tieVoting'].includes(room.phase) ? {
-          submitted: Object.keys(room.actions.dayVotes).length,
+          submitted: Object.keys(room.actions.dayVotes ?? {}).length,
           required: livingPlayers(room).length,
         } : { submitted: 0, required: 0 },
   };
@@ -323,6 +342,25 @@ function setDiscussion(room) {
   room.phaseEndsAt = Date.now() + getDiscussionSeconds(room.round) * 1000;
   room.tieCandidates = [];
   room.actions.dayVotes = {};
+  room.actions.dayReady = {};
+}
+
+function everyoneReadyForVote(room) {
+  const livingIds = livingPlayers(room).map((player) => player.id);
+  return allPlayersReady(livingIds, room.actions.dayReady ?? {});
+}
+
+function everyoneVoted(room) {
+  const livingIds = livingPlayers(room).map((player) => player.id);
+  return allPlayersVoted(livingIds, room.actions.dayVotes ?? {});
+}
+
+function beginVoting(room) {
+  room.phase = 'voting';
+  room.phaseEndsAt = Date.now() + VOTE_SECONDS * 1000;
+  room.actions.dayVotes = {};
+  room.actions.dayReady = {};
+  room.announcement = makeAnnouncement('phase', 'THE VOTE BEGINS', 'Choose the name you believe is hiding in the dark. The vote is private.', 'gold');
 }
 
 function beginNextNight(room) {
@@ -399,6 +437,7 @@ function eliminatePlayer(room, targetId, type) {
       'A MURDER IN THE DARK',
       randomFrom(murderStories)(target.name),
       'red',
+      { victimName: target.name },
     );
   } else {
     room.announcement = makeAnnouncement(
@@ -415,7 +454,8 @@ function eliminatePlayer(room, targetId, type) {
 function resolveNight(room) {
   if (room.status !== 'playing' || room.phase !== 'night') return;
   const livingIds = livingPlayers(room).map((player) => player.id);
-  const murderTargetId = chooseMafiaTarget(room.actions.mafiaVotes, livingIds);
+  const livingMafiaIds = room.players.filter((player) => player.alive && player.role === 'mafia').map((player) => player.id);
+  const murderTargetId = chooseMafiaTarget(room.actions.mafiaVotes, livingIds, livingMafiaIds);
   const protectedTargetId = room.actions.angelTarget;
   const sheriff = room.players.find((player) => player.alive && player.role === 'sheriff');
   if (sheriff && room.actions.sheriffTarget) {
@@ -426,10 +466,8 @@ function resolveNight(room) {
   }
   if (murderTargetId && murderTargetId !== protectedTargetId) {
     eliminatePlayer(room, murderTargetId, 'murder');
-  } else if (murderTargetId && murderTargetId === protectedTargetId) {
-    room.announcement = makeAnnouncement('saved', 'A SOUL WAS SPARED', 'The Angel stood between the chosen victim and the darkness. The murder failed tonight.', 'gold');
   } else {
-    room.announcement = makeAnnouncement('quiet', 'NO BODY AT SUNRISE', 'The night has passed without a confirmed murder. The house is still hungry.', 'muted');
+    room.announcement = makeAnnouncement('quiet', 'THE NIGHT LEFT NO TRACE', 'No one was found at dawn. Whatever moved through the house kept its secret.', 'muted');
   }
   if (checkVictory(room)) return;
   setDiscussion(room);
@@ -470,12 +508,8 @@ async function tickRooms() {
     }
     if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
       if (room.phase === 'night') resolveNight(room);
-      else if (room.phase === 'discussion') {
-        room.phase = 'voting';
-        room.phaseEndsAt = Date.now() + VOTE_SECONDS * 1000;
-        room.actions.dayVotes = {};
-        room.announcement = makeAnnouncement('phase', 'THE VOTE BEGINS', 'Choose the person you believe is Mafia. Your vote is private, and you may change it before the clock expires.', 'gold');
-      } else if (room.phase === 'voting') resolveDayVoting(room, false);
+      else if (room.phase === 'discussion') beginVoting(room);
+      else if (room.phase === 'voting') resolveDayVoting(room, false);
       else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
       changed = true;
     }
@@ -689,6 +723,19 @@ io.on('connection', (socket) => {
     return success({ submitted: true });
   }));
 
+  socket.on('day:ready', withPlayer(socket, 'day:ready', async (room, player, payload) => {
+    if (room.status !== 'playing' || room.phase !== 'discussion') return error('The discussion phase is closed.');
+    if (!player.alive) return error('Ghosts cannot ready the vote.');
+    room.actions.dayReady ??= {};
+    if (payload.ready === false) delete room.actions.dayReady[player.id];
+    else room.actions.dayReady[player.id] = true;
+    const ready = Boolean(room.actions.dayReady[player.id]);
+    const started = everyoneReadyForVote(room);
+    if (started) beginVoting(room);
+    await commit(room);
+    return success({ ready, started });
+  }));
+
   socket.on('day:vote', withPlayer(socket, 'day:vote', async (room, player, payload) => {
     if (room.status !== 'playing' || !['voting', 'tieVoting'].includes(room.phase)) return error('Voting is not open.');
     if (!player.alive) return error('Ghosts cannot vote.');
@@ -696,8 +743,10 @@ io.on('connection', (socket) => {
     if (!target || !target.alive || target.id === player.id) return error('Choose another living player.');
     if (room.phase === 'tieVoting' && !room.tieCandidates.includes(target.id)) return error('You can only vote for one of the tied candidates.');
     room.actions.dayVotes[player.id] = target.id;
+    const tieBreak = room.phase === 'tieVoting';
+    if (everyoneVoted(room)) resolveDayVoting(room, tieBreak);
     await commit(room);
-    return success({ submitted: true });
+    return success({ submitted: true, resolved: room.phase !== (tieBreak ? 'tieVoting' : 'voting') });
   }));
 
   socket.on('chat:send', withPlayer(socket, 'chat:send', async (room, player, payload) => {
@@ -741,6 +790,7 @@ io.on('connection', (socket) => {
       player.disconnectAt = Date.now();
       delete room.actions.mafiaVotes[player.id];
       delete room.actions.dayVotes[player.id];
+      delete room.actions.dayReady?.[player.id];
       if (player.role === 'sheriff') room.actions.sheriffTarget = null;
       if (player.role === 'angel') room.actions.angelTarget = null;
       for (const [voterId, targetId] of Object.entries(room.actions.mafiaVotes)) {
@@ -759,11 +809,12 @@ io.on('connection', (socket) => {
       } else if (room.phase === 'night' && getNightActionProgress(room).allDone) {
         resolveNight(room);
       } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
-        room.phase = 'night';
-        room.round += 1;
-        room.phaseEndsAt = Date.now() + NIGHT_SECONDS * 1000;
-        room.actions = freshActions();
-        room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie could not be resolved after a guest abandoned the table. No one is eliminated by the vote.', 'muted');
+        beginNextNight(room);
+        room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
+      } else if (room.phase === 'discussion' && everyoneReadyForVote(room)) {
+        beginVoting(room);
+      } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
+        resolveDayVoting(room, room.phase === 'tieVoting');
       }
     } else {
       player.connected = false;

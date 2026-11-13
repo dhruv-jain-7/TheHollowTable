@@ -53,15 +53,10 @@ function phaseTitle(snapshot) {
 }
 
 function phaseDescription(snapshot) {
-  if (snapshot.phase === 'night') {
-    if (snapshot.me.role === 'mafia') return 'The town is asleep. Your team must agree on one victim.';
-    if (snapshot.me.role === 'sheriff') return 'Choose one living player to investigate in secret.';
-    if (snapshot.me.role === 'angel') return 'Choose one living soul to protect tonight.';
-    return 'The house is silent. Wait for dawn.';
-  }
-  if (snapshot.phase === 'discussion') return 'Talk at the table. Compare stories. Find the person hiding in plain sight.';
-  if (snapshot.phase === 'voting') return 'Choose one living player to eliminate. Votes are private until the verdict.';
-  if (snapshot.phase === 'tieVoting') return 'The vote was tied. You have five minutes to reconsider between the accused.';
+  if (snapshot.phase === 'night') return 'The house is silent. Choose your action in secret.';
+  if (snapshot.phase === 'discussion') return 'Speak carefully. Someone at this table is lying.';
+  if (snapshot.phase === 'voting') return 'Choose the name that must leave the table.';
+  if (snapshot.phase === 'tieVoting') return 'The vote is tied. Choose again.';
   if (snapshot.phase === 'finished') return snapshot.winner === 'mafia' ? 'The Mafia own the house.' : 'The town has survived.';
   return '';
 }
@@ -233,7 +228,12 @@ function App() {
     if (!selectedTarget) return flash('Choose a player first.', true);
     const response = await request('day:vote', { targetId: selectedTarget });
     if (!response.ok) flash(response.error, true);
-    else flash('Your vote has been recorded. You may change it before the timer ends.');
+    else flash('Vote recorded.');
+  };
+
+  const readyToVote = async (ready) => {
+    const response = await request('day:ready', { ready });
+    if (!response.ok) flash(response.error, true);
   };
 
   const copyCode = async () => {
@@ -295,6 +295,7 @@ function App() {
           setSelectedTarget={setSelectedTarget}
           actNight={actNight}
           vote={vote}
+          readyToVote={readyToVote}
           messageText={messageText}
           setMessageText={setMessageText}
           sendChat={sendChat}
@@ -459,7 +460,31 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session }) {
+function MurderOverlay({ announcement }) {
+  if (!announcement) return null;
+  return (
+    <div className="murder-overlay" key={announcement.id} aria-live="assertive">
+      <div className="murder-red-flash" />
+      <div className="murder-blood-burst" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
+      <div className="murder-knife" aria-hidden="true">
+        <svg viewBox="0 0 180 420">
+          <defs><linearGradient id="knifeSteel" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#fff0db" /><stop offset=".45" stopColor="#aeb4ba" /><stop offset="1" stopColor="#4d5158" /></linearGradient></defs>
+          <path d="M90 8 L137 220 L90 275 L43 220 Z" fill="url(#knifeSteel)" stroke="#d9d0c7" strokeWidth="4" />
+          <path d="M90 275V385" stroke="#39201b" strokeWidth="30" strokeLinecap="round" />
+          <path d="M49 292H131" stroke="#a77b4f" strokeWidth="18" strokeLinecap="round" />
+          <path d="M90 287V378" stroke="#8b4b37" strokeWidth="5" />
+        </svg>
+      </div>
+      <div className="murder-reveal-text">
+        <span>THE HOUSE HAS TAKEN</span>
+        <strong>{announcement.victimName || 'A PLAYER'}</strong>
+        <em>HAS BEEN MURDERED</em>
+      </div>
+    </div>
+  );
+}
+
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, readyToVote, messageText, setMessageText, sendChat, chatEndRef, session }) {
   const isNight = snapshot.phase === 'night';
   const isDiscussion = snapshot.phase === 'discussion';
   const isVoting = snapshot.phase === 'voting';
@@ -468,10 +493,28 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const isVotePhase = isVoting || isTie;
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
   const alivePlayers = snapshot.players.filter((player) => player.alive);
-  const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && snapshot.me.role === 'angel')) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
+  const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && ['angel', 'mafia'].includes(snapshot.me.role))) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
   const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
+  const [identityVisible, setIdentityVisible] = useState(true);
+  const [murderEffect, setMurderEffect] = useState(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIdentityVisible(false), 8500);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (snapshot.announcement?.kind !== 'murder') {
+      setMurderEffect(null);
+      return undefined;
+    }
+    const announcement = snapshot.announcement;
+    setMurderEffect(announcement);
+    const timer = window.setTimeout(() => setMurderEffect(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [snapshot.announcement?.id]);
   const timerUrgent = countdown != null && countdown < 60_000;
-  const chatTitle = isNight && snapshot.me.role === 'mafia' ? 'THE INNER CIRCLE' : 'THE TABLE WHISPERS';
+  const chatTitle = isNight ? 'THE WHISPERS' : 'THE TABLE WHISPERS';
 
   const ringPlayers = useMemo(() => snapshot.players.map((player, index) => {
     const angle = (Math.PI * 2 * index) / snapshot.players.length - Math.PI / 2;
@@ -486,6 +529,15 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
       </div>
       <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
 
+      {isDiscussion && snapshot.me.alive && (
+        <div className="ready-vote-card">
+          <div className="ready-vote-count">{snapshot.discussionReadiness.ready}<span> / {snapshot.discussionReadiness.required} READY</span></div>
+          <button className={snapshot.me.readyToVote ? 'ready-button is-ready' : 'ready-button'} onClick={() => readyToVote(!snapshot.me.readyToVote)} aria-pressed={snapshot.me.readyToVote}>
+            {snapshot.me.readyToVote ? 'READY · WAITING' : 'READY TO VOTE'}
+          </button>
+        </div>
+      )}
+
       {snapshot.announcement && (
         <div key={snapshot.announcement.id} className={`announcement announcement-${snapshot.announcement.accent || 'red'}`}>
           <div className="announcement-side">✦</div>
@@ -494,8 +546,19 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         </div>
       )}
 
+      {murderEffect && <MurderOverlay announcement={murderEffect} />}
+
       <div className="game-main-grid">
         <section className={`table-stage ${isNight ? 'table-night' : ''}`}>
+          <div className="haunted-mansion" aria-hidden="true">
+            <svg viewBox="0 0 900 360" preserveAspectRatio="xMidYMid slice">
+              <path d="M0 360V280L62 280V224L104 224V170L142 224V280H205V236L250 236V180L292 236V280H344V145L388 105L432 145V280H468V193L507 193V145L542 193V280H592V225L634 225V165L676 225V280H725V248L770 248V196L813 248V280H900V360Z" fill="#080708" />
+              <path d="M330 145L388 76L447 145M460 194L507 124L553 194M590 225L634 145L678 225" fill="none" stroke="#6c3436" strokeWidth="9" />
+              <path d="M378 76V25M507 124V66M634 145V87M104 170V120M770 196V145" stroke="#6c3436" strokeWidth="5" />
+              <path d="M368 205H384V235H368ZM411 205H427V235H411ZM488 215H503V240H488ZM521 215H536V240H521ZM620 241H634V265H620ZM650 241H664V265H650ZM128 245H142V270H128ZM760 260H774V278H760Z" fill="#a34b43" opacity=".65" />
+              <path d="M0 302Q160 278 300 306T600 302T900 295V360H0Z" fill="#050505" />
+            </svg>
+          </div>
           <div className="table-haze haze-a" /><div className="table-haze haze-b" />
           <div className="seat-ring">
             {ringPlayers.map((player) => (
@@ -527,24 +590,37 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         </section>
 
         <aside className="game-sidebar">
-          <section className="panel role-panel">
-            <div className="panel-kicker">YOUR SECRET IDENTITY</div>
+          <div className="identity-wrap">
+            <button className="identity-toggle" onClick={() => setIdentityVisible((current) => !current)}>
+              <span aria-hidden="true">{identityVisible ? '◉' : '◈'}</span>
+              {identityVisible ? 'HIDE YOUR IDENTITY' : 'CHECK YOUR IDENTITY'}
+            </button>
+            {identityVisible && <section className="panel role-panel">
             <div className={`role-medallion role-${snapshot.me.role || 'citizen'}`}>{ROLE_SIGNS[snapshot.me.role] || '♟'}</div>
             <h2>{ROLE_NAMES[snapshot.me.role] || 'Unknown'}</h2>
             <p>{snapshot.me.roleDescription}</p>
             {snapshot.me.role === 'mafia' && (
-              <div className="mafia-team"><small>YOUR INNER CIRCLE</small>{snapshot.me.mafiaTeam.map((member) => <span key={member.id}>{member.name}{member.id === snapshot.me.id ? ' (YOU)' : ''}{!member.alive ? ' · DEAD' : ''}</span>)}</div>
+              <div className="mafia-team"><small>YOUR INNER CIRCLE</small>{snapshot.me.mafiaTeam.map((member) => <span key={member.id}>{member.name}{member.id === snapshot.me.id ? ' (YOU)' : ''}{!member.alive ? ' · DEAD' : ''}</span>)}
+                <div className="mafia-coordination">
+                  {snapshot.mafiaChoices?.map((choice) => (
+                    <div key={choice.id}><span>{choice.name}</span><strong>{choice.targetName ? `→ ${choice.targetName}` : 'CHOOSING'}</strong></div>
+                  ))}
+                  <p>{snapshot.actionProgress?.mafiaAgreed ? 'THE TEAM HAS AGREED' : 'ALL LIVING MAFIA MUST CHOOSE THE SAME NAME'}</p>
+                </div>
+              </div>
             )}
             {snapshot.me.privateResults?.length > 0 && (
               <div className="private-results"><small>PRIVATE INVESTIGATION</small>{snapshot.me.privateResults.map((result) => <div key={result.id} className={`private-result result-${result.kind}`}>{result.text}</div>)}</div>
             )}
-          </section>
+            </section>}
+          </div>
 
-          {(isRoleAction || isVotePhase) && (
+          {((isRoleAction && identityVisible) || isVotePhase) && (
             <section className="panel action-panel">
-              <div className="panel-kicker">{isNight ? 'CHOOSE YOUR ACTION' : 'CAST YOUR VOTE'}</div>
-              <h3>{isNight ? snapshot.me.role === 'mafia' ? 'Choose a murder target' : snapshot.me.role === 'sheriff' ? 'Choose someone to investigate' : 'Choose someone to protect' : isTie ? 'Choose between the accused' : 'Who should be eliminated?'}</h3>
-              {isTie && <p className="action-subtext">Only the tied candidates may receive a vote.</p>}
+              <div className="panel-kicker">{isNight ? 'PRIVATE NIGHT ACTION' : 'CAST YOUR VOTE'}</div>
+              <h3>{isNight ? 'Choose one living player' : isTie ? 'Choose between the accused' : 'Who should leave the table?'}</h3>
+              {isTie && <p className="action-subtext">Choose only between the names still accused.</p>}
+              {isNight && snapshot.me.role === 'mafia' && <p className="action-subtext">Every living Mafia member must choose the same name. You can change your choice until they agree.</p>}
               {targetPlayers.length > 0 ? (
                 <div className="target-list">
                   {targetPlayers.map((player) => (
@@ -555,8 +631,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
                 </div>
               ) : <p className="empty-targets">No valid targets are available.</p>}
               <button className="primary-button full-button" onClick={isNight ? actNight : vote} disabled={!selectedTarget}>{snapshot.me.myActionSubmitted ? 'UPDATE ACTION' : isNight ? 'CONFIRM ACTION' : 'SUBMIT / CHANGE VOTE'}</button>
-              {isNight && snapshot.me.role === 'mafia' && <small className="tiny-note">Friendly fire is possible. You may target another Mafia member.</small>}
-              {!isNight && <small className="tiny-note">Votes are private. You can change your choice until the clock ends.</small>}
+
             </section>
           )}
 
@@ -564,7 +639,9 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 
           <section className="panel chat-panel">
             <div className="panel-header"><div><div className="panel-kicker">LIVE CONVERSATION</div><h2>{chatTitle}</h2></div><span className="panel-symbol">☷</span></div>
-            <VoiceRoom code={snapshot.code} token={session?.token} phase={snapshot.phase} round={snapshot.round} enabled={voiceEnabled} />
+            <div className={isNight && !identityVisible ? 'voice-concealed' : ''}>
+              <VoiceRoom code={snapshot.code} token={session?.token} phase={snapshot.phase} round={snapshot.round} enabled={voiceEnabled} />
+            </div>
             <div className="chat-log">
               {snapshot.chat.length === 0 && <div className="chat-empty">The walls are listening. Be the first to speak.</div>}
               {snapshot.chat.map((message) => (
@@ -582,14 +659,16 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
           </section>
         </aside>
       </div>
-      <div className="game-bottom-bar"><span><i /> SERVER-SYNCED GAME CLOCK</span><span>{snapshot.actionProgress.required > 0 ? `${snapshot.actionProgress.submitted}/${snapshot.actionProgress.required} ${isNight ? 'MAFIA CHOICES' : 'VOTES'} RECORDED` : 'PRIVATE ACTIONS'}</span><span>ROLES HIDDEN UNTIL DEATH</span></div>
+
     </section>
   );
 }
 
 function EndGame({ snapshot, onLeave }) {
   return (
-    <section className="endgame-layout">
+    <>
+      {snapshot.lastDeathAnnouncement?.kind === 'murder' && <MurderOverlay announcement={snapshot.lastDeathAnnouncement} />}
+      <section className="endgame-layout">
       <div className="eyebrow"><span /> THE FINAL VERDICT <span /></div>
       <div className={`endgame-seal ${snapshot.winner === 'mafia' ? 'seal-mafia' : 'seal-town'}`}>{snapshot.winner === 'mafia' ? '☠' : '✧'}</div>
       <h1>{snapshot.winner === 'mafia' ? 'The house belongs to the Mafia.' : 'The town survives the night.'}</h1>
@@ -616,7 +695,8 @@ function EndGame({ snapshot, onLeave }) {
         </div>
       </section>
       <button className="primary-button end-button" onClick={onLeave}>RETURN TO THE ENTRANCE <span>↗</span></button>
-    </section>
+      </section>
+    </>
   );
 }
 

@@ -1,5 +1,5 @@
 export function canTargetSelf(role) {
-  return role === 'angel';
+  return role === 'angel' || role === 'mafia';
 }
 
 export function getMafiaCap(playerCount) {
@@ -28,10 +28,16 @@ export function countVotes(votes, allowedTargets = null) {
   return { leaders, highScore, counts };
 }
 
-export function chooseMafiaTarget(votes, livingPlayerIds) {
-  const eligible = new Set(livingPlayerIds);
-  const { leaders } = countVotes(votes, eligible);
-  return leaders.length === 1 ? leaders[0] : null;
+export function chooseMafiaTarget(votes, livingPlayerIds, livingMafiaIds = Object.keys(votes ?? {})) {
+  const eligibleTargets = new Set(livingPlayerIds);
+  const requiredVoters = [...livingMafiaIds];
+  if (requiredVoters.length === 0) return null;
+
+  const selections = requiredVoters.map((playerId) => votes?.[playerId]);
+  if (selections.some((targetId) => typeof targetId !== 'string' || !eligibleTargets.has(targetId))) return null;
+
+  const agreedTarget = selections[0];
+  return selections.every((targetId) => targetId === agreedTarget) ? agreedTarget : null;
 }
 
 export function resolveVote(votes, allowedTargets = null, isTieBreak = false) {
@@ -39,6 +45,14 @@ export function resolveVote(votes, allowedTargets = null, isTieBreak = false) {
   if (leaders.length === 1) return { type: 'eliminate', targetId: leaders[0], candidates: [] };
   if (!isTieBreak && leaders.length > 1) return { type: 'tie', targetId: null, candidates: leaders };
   return { type: 'none', targetId: null, candidates: [] };
+}
+
+export function allPlayersReady(playerIds, readyMap) {
+  return playerIds.length > 0 && playerIds.every((id) => Boolean(readyMap?.[id]));
+}
+
+export function allPlayersVoted(playerIds, votes) {
+  return playerIds.length > 0 && playerIds.every((id) => typeof votes?.[id] === 'string');
 }
 
 export function getWinner(players) {
@@ -54,8 +68,20 @@ export function getNightActionProgress(room) {
   const livingMafia = room.players.filter((p) => p.alive && p.role === 'mafia');
   const sheriff = room.players.find((p) => p.alive && p.role === 'sheriff');
   const angel = room.players.find((p) => p.alive && p.role === 'angel');
-  const mafiaDone = livingMafia.every((p) => room.actions.mafiaVotes[p.id]);
+  const mafiaVotes = room.actions.mafiaVotes ?? {};
+  const mafiaSubmitted = livingMafia.filter((p) => typeof mafiaVotes[p.id] === 'string').length;
+  const mafiaTargets = livingMafia.map((p) => mafiaVotes[p.id]).filter(Boolean);
+  const mafiaDone = livingMafia.length > 0
+    && mafiaSubmitted === livingMafia.length
+    && new Set(mafiaTargets).size === 1;
   const sheriffDone = !sheriff || Boolean(room.actions.sheriffTarget);
   const angelDone = !angel || Boolean(room.actions.angelTarget);
-  return { mafiaDone, sheriffDone, angelDone, allDone: mafiaDone && sheriffDone && angelDone };
+  return {
+    mafiaDone,
+    mafiaSubmitted,
+    mafiaRequired: livingMafia.length,
+    sheriffDone,
+    angelDone,
+    allDone: mafiaDone && sheriffDone && angelDone,
+  };
 }

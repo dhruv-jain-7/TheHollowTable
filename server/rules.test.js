@@ -9,6 +9,8 @@ import {
   getWinner,
   getNightActionProgress,
   canTargetSelf,
+  allPlayersReady,
+  allPlayersVoted,
 } from './rules.js';
 
 test('discussion clock follows the round schedule and never drops below four minutes', () => {
@@ -34,10 +36,12 @@ test('vote counting handles ties and ignores invalid targets', () => {
   assert.equal(result.highScore, 2);
 });
 
-test('mafia target is chosen only when there is one living leader', () => {
-  assert.equal(chooseMafiaTarget({ a: 'p1', b: 'p1', c: 'p2' }, ['p1', 'p2']), 'p1');
-  assert.equal(chooseMafiaTarget({ a: 'p1', b: 'p2' }, ['p1', 'p2']), null);
-  assert.equal(chooseMafiaTarget({ a: 'p1', b: 'dead' }, ['p1', 'p2']), 'p1');
+test('Mafia must unanimously choose one living target', () => {
+  assert.equal(chooseMafiaTarget({ m1: 'p1', m2: 'p1' }, ['p1', 'p2'], ['m1', 'm2']), 'p1');
+  assert.equal(chooseMafiaTarget({ m1: 'p1', m2: 'p2' }, ['p1', 'p2'], ['m1', 'm2']), null);
+  assert.equal(chooseMafiaTarget({ m1: 'p1' }, ['p1', 'p2'], ['m1', 'm2']), null);
+  assert.equal(chooseMafiaTarget({ m1: 'p1', m2: 'dead' }, ['p1', 'p2'], ['m1', 'm2']), null);
+  assert.equal(chooseMafiaTarget({ m1: 'm1' }, ['m1', 'p2'], ['m1']), 'm1');
 });
 
 test('a first-round tie opens a tie-break; a second tie eliminates nobody', () => {
@@ -54,7 +58,7 @@ test('a tie-break can still produce one elimination and excludes non-candidates'
   assert.equal(result.targetId, 'x');
 });
 
-test('night actions complete only after all living special roles have acted', () => {
+test('night actions finish only after Mafia agree and Sheriff and Angel act', () => {
   const room = {
     players: [
       { id: 'm1', role: 'mafia', alive: true },
@@ -66,9 +70,23 @@ test('night actions complete only after all living special roles have acted', ()
     actions: { mafiaVotes: { m1: 'c' }, sheriffTarget: 'm1', angelTarget: null },
   };
   assert.equal(getNightActionProgress(room).allDone, false);
-  room.actions.mafiaVotes.m2 = 'c';
+  room.actions.mafiaVotes.m2 = 's';
   room.actions.angelTarget = 'c';
+  assert.equal(getNightActionProgress(room).allDone, false);
+  room.actions.mafiaVotes.m2 = 'c';
   assert.equal(getNightActionProgress(room).allDone, true);
+});
+
+test('every living player must be ready before discussion ends early', () => {
+  assert.equal(allPlayersReady(['p1', 'p2', 'p3'], { p1: true, p2: true }), false);
+  assert.equal(allPlayersReady(['p1', 'p2', 'p3'], { p1: true, p2: true, p3: true }), true);
+  assert.equal(allPlayersReady([], {}), false);
+});
+
+test('voting completes after every living player submits a vote', () => {
+  assert.equal(allPlayersVoted(['p1', 'p2'], { p1: 'p3' }), false);
+  assert.equal(allPlayersVoted(['p1', 'p2'], { p1: 'p3', p2: 'p1' }), true);
+  assert.equal(allPlayersVoted([], {}), false);
 });
 
 test('victory detection handles town win, mafia parity, and continuing games', () => {
@@ -81,9 +99,9 @@ test('victory detection handles town win, mafia parity, and continuing games', (
   ]), null);
 });
 
-test('only the Angel may choose themselves as a night target', () => {
+test('Mafia and Angel may choose themselves as a night target', () => {
   assert.equal(canTargetSelf('angel'), true);
-  assert.equal(canTargetSelf('mafia'), false);
+  assert.equal(canTargetSelf('mafia'), true);
   assert.equal(canTargetSelf('sheriff'), false);
   assert.equal(canTargetSelf('citizen'), false);
 });
