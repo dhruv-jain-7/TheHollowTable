@@ -467,6 +467,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const isRoleAction = isNight && ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role);
   const isVotePhase = isVoting || isTie;
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
+  const alivePlayers = snapshot.players.filter((player) => player.alive);
   const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && snapshot.me.role === 'angel')) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
   const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
   const timerUrgent = countdown != null && countdown < 60_000;
