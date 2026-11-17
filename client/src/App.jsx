@@ -30,7 +30,16 @@ const AVATARS = [
 ];
 
 const ROLE_NAMES = { mafia: 'Mafia', sheriff: 'Sheriff', angel: 'Angel', citizen: 'Citizen' };
-const ROLE_SIGNS = { mafia: '☠', sheriff: '⌕', angel: '✧', citizen: '♟' };
+
+function roleCardFor(role, mafiaIndex = 0) {
+  if (role === 'mafia') {
+    const clubs = mafiaIndex % 2 === 1;
+    return { rank: 'A', suit: clubs ? '♣' : '♠', suitName: clubs ? 'CLUBS' : 'SPADES', roleName: 'MAFIA', art: '☠', className: 'mafia', motto: 'THE HOUSE HAS TEETH' };
+  }
+  if (role === 'sheriff') return { rank: 'A', suit: '♦', suitName: 'DIAMONDS', roleName: 'SHERIFF', art: '⚖', className: 'sheriff', motto: 'KEEP THE LIGHT ALIVE' };
+  if (role === 'angel') return { rank: 'A', suit: '♥', suitName: 'HEARTS', roleName: 'ANGEL', art: '✧', className: 'angel', motto: 'ONE SOUL MAY BE SPARED' };
+  return { rank: '7', suit: '♦', suitName: 'DIAMONDS', roleName: 'CITIZEN', art: '🕯', className: 'citizen', motto: 'FIND THE HIDDEN HAND' };
+}
 
 function avatarFor(id) {
   return AVATARS.find((avatar) => avatar.id === id) ?? AVATARS[0];
@@ -55,12 +64,44 @@ function phaseTitle(snapshot) {
 
 function phaseDescription(snapshot) {
   if (snapshot.phase === 'night') return 'The house is silent. Choose your action in secret.';
-  if (snapshot.phase === 'discussion') return 'Speak carefully. Someone at this table is lying.';
-  if (snapshot.phase === 'voting') return 'Choose the name that must leave the table.';
-  if (snapshot.phase === 'tieVoting') return 'The vote is tied. Choose again.';
+  if (snapshot.phase === 'discussion') return 'Speak carefully. Mark ready when you have said your piece; the full discussion clock remains in control.';
+  if (snapshot.phase === 'voting') return 'You have up to 100 seconds. Voting closes as soon as every living player has submitted a choice.';
+  if (snapshot.phase === 'tieVoting') return 'The vote is tied. You have up to 100 seconds to choose between the remaining accused.';
   if (snapshot.phase === 'transition') return 'The house is deciding what happens next.';
   if (snapshot.phase === 'finished') return snapshot.winner === 'mafia' ? 'The Mafia own the house.' : 'The town has survived.';
   return '';
+}
+
+function RolePlayingCard({ card, faceUp = true, onFlip, compact = false }) {
+  const Tag = onFlip ? 'button' : 'div';
+  return (
+    <Tag
+      type={onFlip ? 'button' : undefined}
+      className={`identity-card ${compact ? 'identity-card-compact' : ''} ${faceUp ? 'identity-card-faceup' : 'identity-card-facedown'} identity-card-${card.className}`}
+      onClick={onFlip}
+      aria-label={onFlip ? 'Flip your identity card to reveal your role' : `${card.rank} of ${card.suitName}, ${card.roleName}`}
+    >
+      <span className="identity-card-inner">
+        <span className="identity-card-back">
+          <span className="card-back-corner">✦</span>
+          <span className="card-back-sigil">☾</span>
+          <strong>THE HOLLOW<br />TABLE</strong>
+          <span className="card-back-rule" />
+          <small>YOUR FATE IS SEALED</small>
+          <span className="card-back-corner card-back-corner-bottom">✦</span>
+        </span>
+        <span className="identity-card-front">
+          <span className="card-corner card-corner-top"><b>{card.rank}</b><i>{card.suit}</i></span>
+          <span className="card-suit-watermark">{card.suit}</span>
+          <span className="card-art" aria-hidden="true">{card.art}</span>
+          <span className="card-face-title">{card.roleName}</span>
+          <span className="card-face-subtitle">{card.rank} OF {card.suitName}</span>
+          <span className="card-face-motto">{card.motto}</span>
+          <span className="card-corner card-corner-bottom"><b>{card.rank}</b><i>{card.suit}</i></span>
+        </span>
+      </span>
+    </Tag>
+  );
 }
 
 function App() {
@@ -160,7 +201,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [snapshot?.chat?.length]);
 
   const createTable = async () => {
@@ -251,6 +292,12 @@ function App() {
     else flash('Vote recorded.');
   };
 
+  const readyToVote = async () => {
+    const response = await request('day:ready');
+    if (!response.ok) flash(response.error, true);
+    else flash(response.ready ? 'You are marked ready for the vote.' : 'You are no longer marked ready.');
+  };
+
   const copyCode = async () => {
     try {
       await navigator.clipboard.writeText(snapshot.code);
@@ -319,6 +366,7 @@ function App() {
           clock={clock}
           serverOffset={serverOffset}
           onKickPlayer={kickPlayer}
+          onReadyToVote={readyToVote}
         />
       )}
 
@@ -606,27 +654,65 @@ function SheriffRevealOverlay({ result }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer }) {
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote }) {
   const isNight = snapshot.phase === 'night';
   const isDiscussion = snapshot.phase === 'discussion';
   const isVoting = snapshot.phase === 'voting';
   const isTie = snapshot.phase === 'tieVoting';
   const isTransition = snapshot.phase === 'transition';
   const transitionElapsed = snapshot.transition?.startedAt ? Math.max(0, clock + serverOffset - snapshot.transition.startedAt) : 0;
-  const isRoleAction = isNight && ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role);
-  const isVotePhase = isVoting || isTie;
+  const isRoleAction = isNight && snapshot.me.alive && ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role);
+  const isVotePhase = snapshot.me.alive && (isVoting || isTie);
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
   const alivePlayers = snapshot.players.filter((player) => player.alive);
   const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && ['angel', 'mafia'].includes(snapshot.me.role))) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
   const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
-  const [identityVisible, setIdentityVisible] = useState(true);
+  const identityStorageKey = `hollow-role-seen:${snapshot.code}:${snapshot.me.id}`;
+  const [identityVisible, setIdentityVisible] = useState(false);
+  const [identitySequence, setIdentitySequence] = useState(() => {
+    try { return sessionStorage.getItem(identityStorageKey) ? 'done' : 'countdown'; }
+    catch { return 'countdown'; }
+  });
+  const [countdownNumber, setCountdownNumber] = useState(3);
+  const [identityFlipped, setIdentityFlipped] = useState(false);
+  const [hostControlsOpen, setHostControlsOpen] = useState(false);
   const [sheriffReveal, setSheriffReveal] = useState(null);
   const seenSheriffResultRef = useRef(snapshot.me.privateResults?.[0]?.id || null);
+  const roleCardStorageKey = `hollow-role-card:${snapshot.code}:${snapshot.me.id}`;
+  const [roleCard] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem(roleCardStorageKey);
+      if (stored) return JSON.parse(stored);
+      const mafiaIndex = snapshot.me.role === 'mafia' ? Math.max(0, snapshot.me.mafiaTeam.findIndex((member) => member.id === snapshot.me.id)) : 0;
+      const card = roleCardFor(snapshot.me.role, mafiaIndex);
+      sessionStorage.setItem(roleCardStorageKey, JSON.stringify(card));
+      return card;
+    } catch {
+      return roleCardFor(snapshot.me.role, 0);
+    }
+  });
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setIdentityVisible(false), 8500);
-    return () => window.clearTimeout(timer);
-  }, []);
+    if (identitySequence !== 'countdown') return undefined;
+    let value = 3;
+    setCountdownNumber(value);
+    const timer = window.setInterval(() => {
+      value -= 1;
+      if (value <= 0) {
+        window.clearInterval(timer);
+        setIdentitySequence('card');
+      } else {
+        setCountdownNumber(value);
+      }
+    }, 850);
+    return () => window.clearInterval(timer);
+  }, [identitySequence]);
+
+  const finishIdentityReveal = () => {
+    try { sessionStorage.setItem(identityStorageKey, 'seen'); } catch { /* The card still works without storage. */ }
+    setIdentitySequence('done');
+    setIdentityVisible(true);
+  };
 
   useEffect(() => {
     const latestResult = snapshot.me.privateResults?.[0];
@@ -647,6 +733,31 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 
   return (
     <section className="game-layout">
+      {identitySequence !== 'done' && (
+        <div className="identity-intro" role="dialog" aria-modal="true" aria-label="Your secret role">
+          {identitySequence === 'countdown' ? (
+            <div className="identity-countdown-stage">
+              <span>THE HOUSE IS DEALING YOUR FATE</span>
+              <strong key={countdownNumber}>{countdownNumber}</strong>
+              <small>KEEP YOUR EYES ON THE CARD</small>
+            </div>
+          ) : (
+            <div className="identity-intro-card-stage">
+              <span className="identity-intro-kicker">ONE CARD. ONE SECRET. KEEP IT HIDDEN.</span>
+              <RolePlayingCard
+                card={roleCard}
+                faceUp={identityFlipped}
+                onFlip={() => { if (!identityFlipped) { setIdentityFlipped(true); setIdentitySequence('revealed'); } }}
+              />
+              {identityFlipped ? (
+                <button className="primary-button identity-continue-button" onClick={finishIdentityReveal}>ENTER THE HOUSE <span>↗</span></button>
+              ) : (
+                <p className="identity-card-instruction">CLICK THE CARD TO REVEAL YOUR IDENTITY</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="game-topline">
         <div><span className="room-pill">TABLE {snapshot.code}</span><span className="round-pill">ROUND {snapshot.round}</span></div>
         {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
@@ -753,12 +864,11 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               </button>
             ))}
           </div>
-          <div className="round-table">
-            <div className="table-engraving">✦</div>
+          <div className="round-table" aria-label="The Hollow Table, an endless dark well">
+            <div className="void-well" aria-hidden="true"><i className="void-ring void-ring-one" /><i className="void-ring void-ring-two" /><i className="void-ring void-ring-three" /><i className="void-core" /></div>
+            <div className="table-emblem">✦</div>
             <div className="table-name">THE HOLLOW<br /><em>TABLE</em></div>
-            <div className="table-center-line" />
-            <div className="table-candles"><i /><i /><i /></div>
-            <span className="table-center-caption">{isNight ? 'THE MURDER HOUR' : 'SPEAK THE TRUTH'}</span>
+            <span className="table-center-caption">THE DARK HAS NO BOTTOM</span>
           </div>
           <div className="table-floor-label">{snapshot.players.filter((player) => player.alive).length} SOULS REMAIN</div>
         </section>
@@ -770,7 +880,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               {identityVisible ? 'HIDE YOUR IDENTITY' : 'CHECK YOUR IDENTITY'}
             </button>
             {identityVisible && <section className="panel role-panel">
-            <div className={`role-medallion role-${snapshot.me.role || 'citizen'}`}>{ROLE_SIGNS[snapshot.me.role] || '♟'}</div>
+            <RolePlayingCard card={roleCard} faceUp compact />
             <h2>{ROLE_NAMES[snapshot.me.role] || 'Unknown'}</h2>
             <p>{snapshot.me.roleDescription}</p>
             {snapshot.me.role === 'mafia' && (
@@ -788,6 +898,18 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             )}
             </section>}
           </div>
+
+          {isDiscussion && snapshot.me.alive && (
+            <section className="panel readiness-panel">
+              <div className="panel-kicker">THE DISCUSSION FLOOR</div>
+              <div className="readiness-heading"><h3>Ready to vote?</h3><strong>{snapshot.discussionReadiness.ready}/{snapshot.discussionReadiness.required}</strong></div>
+              <div className="readiness-track"><span style={{ width: `${snapshot.discussionReadiness.required ? (snapshot.discussionReadiness.ready / snapshot.discussionReadiness.required) * 100 : 0}%` }} /></div>
+              <button className={`readiness-button ${snapshot.me.readyToVote ? 'is-ready' : ''}`} onClick={onReadyToVote}>
+                {snapshot.me.readyToVote ? '✓ YOU ARE READY · UNDO' : 'I AM READY TO VOTE'}
+              </button>
+              <p>{snapshot.discussionReadiness.ready >= snapshot.discussionReadiness.required ? 'Everyone is ready. The discussion clock will still run its full course; voting opens when it expires.' : 'Mark yourself ready when you have finished speaking. The discussion timer remains in control.'}</p>
+            </section>
+          )}
 
           {(isRoleAction || isVotePhase) && (
             <section className="panel action-panel">
@@ -811,22 +933,30 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             </section>
           )}
 
-          {isNight && !isRoleAction && <div className="panel waiting-panel"><div className="waiting-orbit">☾</div><h3>The town is asleep</h3><p>Wait for the morning bell. The night actions are hidden from you.</p></div>}
+          {isNight && !isRoleAction && snapshot.me.alive && <div className="panel waiting-panel"><div className="waiting-orbit">☾</div><h3>The town is asleep</h3><p>Wait for the morning bell. The night actions are hidden from you.</p></div>}
+          {!snapshot.me.alive && <div className="panel ghost-observer-panel"><div className="waiting-orbit">👁</div><h3>You are beyond the table</h3><p>The dead cannot vote, chat, or take night actions. Watch silently until the final verdict.</p></div>}
 
           {snapshot.me.isHost && (
-            <section className="panel host-panel">
-              <div className="panel-header"><div><div className="panel-kicker">HOST AUTHORITY</div><h2>Manage the table</h2></div><span className="panel-symbol">♜</span></div>
-              <p className="host-panel-note">Remove a guest who is disrupting the game or cannot return. Their role stays secret until the final reveal.</p>
-              <div className="host-player-list">
-                {snapshot.players.filter((player) => player.id !== snapshot.me.id).map((player) => (
-                  <div className="host-player-row" key={player.id}>
-                    <span className="host-player-avatar">{avatarFor(player.avatar).face}</span>
-                    <span className="host-player-name">{player.name}<small>{!player.connected ? 'OFFLINE' : !player.alive ? 'FALLEN' : 'IN GAME'}</small></span>
-                    <button className="host-kick-button" onClick={() => onKickPlayer(player)}>REMOVE</button>
+            <div className="host-controls-wrap">
+              <button className="host-controls-toggle" onClick={() => setHostControlsOpen((open) => !open)} aria-expanded={hostControlsOpen}>
+                <span>♜</span> HOST CONTROLS <strong>{hostControlsOpen ? '− CLOSE' : '+ OPEN'}</strong>
+              </button>
+              {hostControlsOpen && (
+                <section className="panel host-panel">
+                  <div className="panel-header"><div><div className="panel-kicker">HOST AUTHORITY</div><h2>Manage the table</h2></div><span className="panel-symbol">♜</span></div>
+                  <p className="host-panel-note">Remove a guest who is disrupting the game or cannot return. Their role stays secret until the final reveal.</p>
+                  <div className="host-player-list">
+                    {snapshot.players.filter((player) => player.id !== snapshot.me.id).map((player) => (
+                      <div className="host-player-row" key={player.id}>
+                        <span className="host-player-avatar">{avatarFor(player.avatar).face}</span>
+                        <span className="host-player-name">{player.name}<small>{!player.connected ? 'OFFLINE' : !player.alive ? 'FALLEN' : 'IN GAME'}</small></span>
+                        <button className="host-kick-button" onClick={() => onKickPlayer(player)}>REMOVE</button>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </section>
+                </section>
+              )}
+            </div>
           )}
 
           <section className="panel chat-panel">
@@ -839,7 +969,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               {snapshot.chat.map((message) => (
                 <div className={`chat-message ${message.playerId === snapshot.me.id ? 'chat-own' : ''}`} key={message.id}>
                   <span className="chat-avatar">{avatarFor(message.avatar).face}</span>
-                  <div><small>{message.playerName} <time>{new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></small><p>{message.text}</p></div>
+                  <div><small>{message.playerName}</small><p>{message.text}</p></div>
                 </div>
               ))}
               <div ref={chatEndRef} />
@@ -857,14 +987,36 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 }
 
 function EndGame({ snapshot, onLeave }) {
+  const winningPlayers = snapshot.players.filter((player) => snapshot.winner === 'mafia' ? player.role === 'mafia' : player.role !== 'mafia');
+  const winnerLabel = snapshot.winner === 'mafia' ? 'THE MAFIA WIN' : 'THE TOWN WINS';
   return (
-    <>
-      <section className="endgame-layout">
+    <section className={`endgame-layout endgame-${snapshot.winner || 'town'}`}>
+      <div className="endgame-embers" aria-hidden="true"><i /><i /><i /><i /><i /><i /></div>
       <div className="eyebrow"><span /> THE FINAL VERDICT <span /></div>
       <div className={`endgame-seal ${snapshot.winner === 'mafia' ? 'seal-mafia' : 'seal-town'}`}>{snapshot.winner === 'mafia' ? '☠' : '✧'}</div>
-      <div className={`winner-banner ${snapshot.winner === 'mafia' ? 'winner-mafia' : 'winner-town'}`}><span>THE WINNING FACTION</span><strong>{snapshot.winner === 'mafia' ? 'THE MAFIA' : 'THE TOWN'}</strong></div>
-      <h1>{snapshot.winner === 'mafia' ? 'The house belongs to the Mafia.' : 'The town survives the night.'}</h1>
+      <div className={`winner-banner ${snapshot.winner === 'mafia' ? 'winner-mafia' : 'winner-town'}`}>
+        <span>THE WINNING FACTION</span>
+        <strong>{winnerLabel}</strong>
+        <small>{winningPlayers.length} SOUL{winningPlayers.length === 1 ? '' : 'S'} CLAIMED THE VICTORY</small>
+      </div>
+      <h1>{snapshot.winner === 'mafia' ? 'The house belongs to the Mafia.' : 'The town has broken the house’s curse.'}</h1>
       <p>{snapshot.announcement?.text}</p>
+
+      <section className="winning-roster panel">
+        <div className="panel-kicker">THE PLAYERS WHO WON</div>
+        <h2>{snapshot.winner === 'mafia' ? 'The House’s Hidden Masters' : 'The Souls Who Saved the Town'}</h2>
+        <div className="winning-roster-grid">
+          {winningPlayers.map((player) => (
+            <div className={`winning-player ${player.role === 'mafia' ? 'winning-mafia' : ''}`} key={player.id}>
+              <span className="winning-avatar">{avatarFor(player.avatar).face}</span>
+              <strong>{player.name}</strong>
+              <small>{ROLE_NAMES[player.role] || player.role}</small>
+              <em>{player.alive ? 'STILL STANDING' : 'FELL BEFORE THE VERDICT'}</em>
+            </div>
+          ))}
+        </div>
+      </section>
+
       {snapshot.lastDeathAnnouncement && (
         <div className={`announcement announcement-${snapshot.lastDeathAnnouncement.accent || 'red'} final-death-report`}>
           <div className="announcement-side">✦</div>
@@ -874,21 +1026,20 @@ function EndGame({ snapshot, onLeave }) {
       )}
       <section className="panel reveal-panel">
         <div className="panel-kicker">EVERY SECRET, REVEALED</div>
-        <h2>The final guest list</h2>
+        <h2>The final table · every soul accounted for</h2>
         <div className="reveal-grid">
           {snapshot.players.map((player) => (
-            <div className={`reveal-player ${player.role === 'mafia' ? 'reveal-mafia' : ''}`} key={player.id}>
+            <div className={`reveal-player ${player.role === 'mafia' ? 'reveal-mafia' : ''} ${player.alive ? 'reveal-living' : 'reveal-fallen'}`} key={player.id}>
               <span className="reveal-avatar">{avatarFor(player.avatar).face}</span>
               <span className="reveal-name">{player.name}</span>
               <span className="reveal-role">{ROLE_NAMES[player.role] || player.role}</span>
-              <span className={`reveal-state ${player.alive ? 'still-alive' : ''}`}>{player.alive ? 'SURVIVED' : 'CLAIMED'}</span>
+              <span className={`reveal-state ${player.alive ? 'still-alive' : ''}`}>{player.alive ? 'SURVIVED' : 'FALLEN'}</span>
             </div>
           ))}
         </div>
       </section>
       <button className="primary-button end-button" onClick={onLeave}>RETURN TO THE ENTRANCE <span>↗</span></button>
-      </section>
-    </>
+    </section>
   );
 }
 

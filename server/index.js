@@ -65,8 +65,8 @@ let livekitRoomService = null;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const AVATAR_IDS = new Set(['raven','skull','ghost','bat','wolf','cat','owl','spider','moth','snake','candle','rose','moon','pumpkin','key','crow','coffin','crystal','mask','poison','blackheart','eye','rose2','moon2']);
 const NIGHT_SECONDS = 90;
-const VOTE_SECONDS = 60;
-const TIE_SECONDS = 5 * 60;
+const VOTE_SECONDS = 100;
+const TIE_SECONDS = 100;
 const MURDER_TRANSITION_MS = 7200;
 const QUIET_TRANSITION_MS = 5000;
 const ELIMINATION_TRANSITION_MS = 13200;
@@ -138,21 +138,21 @@ function makeAnnouncement(kind, title, text, accent = 'red', extra = {}) {
 }
 
 const murderStories = [
-  (name) => `${name} was found beneath the old staircase. The floorboards were wet. No one heard a thing.`,
-  (name) => `A candle burned in ${name}'s room. At dawn, the bed was empty and the locked door stood open.`,
-  (name) => `${name} followed a whisper into the cellar. The door slammed. The house went quiet.`,
-  (name) => `The clock stopped at 3:13. ${name} was gone. A fresh handprint marked the wall.`,
-  (name) => `The fog swallowed ${name} beneath the courtyard arch. Only their footsteps came back.`,
-  (name) => `${name}'s chair was empty. A dark stain crossed the floor and vanished beneath the table.`,
+  (name) => `At 3:13 a.m., the cellar door opened by itself. ${name} went down. Only their shadow came back.`,
+  (name) => `${name} heard someone calling from the locked attic. By morning, the bed was cold and the key was still inside the room.`,
+  (name) => `A candle went out. Something moved behind the curtains. When the lights returned, ${name} was gone.`,
+  (name) => `The house clock stopped at 3:13. A slow knock came from beneath the floor. ${name} never answered roll call.`,
+  (name) => `The fog closed around ${name} beneath the courtyard arch. Their footsteps returned alone.`,
+  (name) => `${name}'s chair was empty. Three fresh scratches marked the table, pointing toward the dark below.`,
 ];
 
 const eliminationStories = [
-  (name) => `${name} walked into the candlelit hall. The doors closed. The table had made its choice.`,
-  (name) => `The ballroom lights went out as ${name} entered. When they returned, the room was empty.`,
-  (name) => `The lift carried ${name} below the house. It never came back.`,
-  (name) => `Black mist filled the winter garden. ${name} did not return.`,
-  (name) => `A final invitation waited for ${name}. The music played, but no one saw them again.`,
-  (name) => `The staircase groaned. A shadow moved the wrong way. Then came silence. ${name} was gone.`,
+  (name) => `The table called ${name} to the front of the room. The lights died. When they returned, the chair was empty.`,
+  (name) => `${name} followed a pale figure through the red door. It closed quietly. No footsteps returned.`,
+  (name) => `The lift carried ${name} below the house. The floor indicator kept descending long after the basement.`,
+  (name) => `A voice whispered ${name}'s name from the winter garden. They answered. The mist closed behind them.`,
+  (name) => `A final invitation waited for ${name}. The music stopped as soon as they crossed the threshold.`,
+  (name) => `The staircase groaned under ${name}'s feet. A second set of footsteps followed. Only one person reached the bottom.`,
 ];
 
 function roleDescription(role) {
@@ -744,7 +744,7 @@ function ipAllowed(ip) {
 function chatAllowed(playerId) {
   const now = Date.now();
   const entries = (chatAttempts.get(playerId) ?? []).filter((time) => now - time < 5000);
-  if (entries.length >= 5) return false;
+  if (entries.length >= 8) return false;
   entries.push(now);
   chatAttempts.set(playerId, entries);
   return true;
@@ -952,7 +952,15 @@ io.on('connection', (socket) => {
   socket.on('day:ready', withPlayer(socket, 'day:ready', async (room, player) => {
     if (room.status !== 'playing' || room.phase !== 'discussion') return error('The discussion phase is closed.');
     if (!player.alive) return error('Ghosts cannot ready the vote.');
-    return success({ ready: false, started: false });
+    room.actions.dayReady ??= {};
+    const ready = !Boolean(room.actions.dayReady[player.id]);
+    if (ready) room.actions.dayReady[player.id] = true;
+    else delete room.actions.dayReady[player.id];
+    const living = livingPlayers(room);
+    const readyCount = living.filter((member) => room.actions.dayReady[member.id]).length;
+    // Readiness is a signal to the table, not a shortcut: the full discussion timer remains authoritative.
+    await commit(room);
+    return success({ ready, readyCount, required: living.length, started: false });
   }));
 
   socket.on('day:vote', withPlayer(socket, 'day:vote', async (room, player, payload) => {
