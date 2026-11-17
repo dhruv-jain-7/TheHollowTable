@@ -306,7 +306,9 @@ async function initializeDatabase() {
     const room = row.state;
     if (!room || !room.code || !Array.isArray(room.players)) continue;
     for (const player of room.players) { player.connected = false; player.disconnectAt = Date.now(); }
-    room.hostGraceUntil = null;
+    // Give the original host a reconnect window after a server restart/deploy.
+    // Without this, the first guest to resume can accidentally take host ownership.
+    room.hostGraceUntil = Date.now() + RECONNECT_GRACE_MS;
     rooms.set(room.code, room);
   }
   await pool.query('DELETE FROM hollow_rooms WHERE expires_at <= NOW()');
@@ -958,9 +960,11 @@ io.on('connection', (socket) => {
     else delete room.actions.dayReady[player.id];
     const living = livingPlayers(room);
     const readyCount = living.filter((member) => room.actions.dayReady[member.id]).length;
-    // Readiness is a signal to the table, not a shortcut: the full discussion timer remains authoritative.
+    // Once every living player is ready, end discussion immediately and open voting.
+    const started = living.length > 0 && readyCount === living.length;
+    if (started) beginVoting(room);
     await commit(room);
-    return success({ ready, readyCount, required: living.length, started: false });
+    return success({ ready, readyCount, required: living.length, started });
   }));
 
   socket.on('day:vote', withPlayer(socket, 'day:vote', async (room, player, payload) => {

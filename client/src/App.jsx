@@ -64,7 +64,7 @@ function phaseTitle(snapshot) {
 
 function phaseDescription(snapshot) {
   if (snapshot.phase === 'night') return 'The house is silent. Choose your action in secret.';
-  if (snapshot.phase === 'discussion') return 'Speak carefully. Mark ready when you have said your piece; the full discussion clock remains in control.';
+  if (snapshot.phase === 'discussion') return 'Speak carefully. Voting opens as soon as every living player is ready, or when the discussion clock expires.';
   if (snapshot.phase === 'voting') return 'You have up to 100 seconds. Voting closes as soon as every living player has submitted a choice.';
   if (snapshot.phase === 'tieVoting') return 'The vote is tied. You have up to 100 seconds to choose between the remaining accused.';
   if (snapshot.phase === 'transition') return 'The house is deciding what happens next.';
@@ -669,10 +669,9 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
   const identityStorageKey = `hollow-role-seen:${snapshot.code}:${snapshot.me.id}`;
   const [identityVisible, setIdentityVisible] = useState(false);
-  const [identitySequence, setIdentitySequence] = useState(() => {
-    try { return sessionStorage.getItem(identityStorageKey) ? 'done' : 'countdown'; }
-    catch { return 'countdown'; }
-  });
+  // Always show the private role reveal when a player enters the live game.
+  // The role itself is still stable in sessionStorage, so reconnecting cannot change it.
+  const [identitySequence, setIdentitySequence] = useState('countdown');
   const [countdownNumber, setCountdownNumber] = useState(3);
   const [identityFlipped, setIdentityFlipped] = useState(false);
   const [hostControlsOpen, setHostControlsOpen] = useState(false);
@@ -907,7 +906,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               <button className={`readiness-button ${snapshot.me.readyToVote ? 'is-ready' : ''}`} onClick={onReadyToVote}>
                 {snapshot.me.readyToVote ? '✓ YOU ARE READY · UNDO' : 'I AM READY TO VOTE'}
               </button>
-              <p>{snapshot.discussionReadiness.ready >= snapshot.discussionReadiness.required ? 'Everyone is ready. The discussion clock will still run its full course; voting opens when it expires.' : 'Mark yourself ready when you have finished speaking. The discussion timer remains in control.'}</p>
+              <p>{snapshot.discussionReadiness.ready >= snapshot.discussionReadiness.required ? 'Everyone is ready. Voting is now open.' : 'Mark yourself ready when you have finished speaking. Once everyone is ready, voting opens immediately; otherwise the discussion timer remains in control.'}</p>
             </section>
           )}
 
