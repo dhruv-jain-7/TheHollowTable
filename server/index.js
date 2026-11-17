@@ -609,6 +609,10 @@ function resolveNight(room) {
   if (room.status !== 'playing' || room.phase !== 'night') return;
   const murderTargetId = chooseMafiaTargetAtDeadline(room);
   const protectedTargetId = room.actions.angelTarget;
+  // Remember the target selected for this completed night so the Angel cannot
+  // protect the same player in two consecutive rounds. This is room state and
+  // is persisted with the normal room commit.
+  if (protectedTargetId) room.angelLastProtectedTargetId = protectedTargetId;
   const sheriff = room.players.find((player) => player.alive && player.role === 'sheriff');
 
   if (murderTargetId && murderTargetId !== protectedTargetId) {
@@ -907,6 +911,7 @@ io.on('connection', (socket) => {
     remaining.forEach((entry) => { entry.role = 'citizen'; });
     room.status = 'playing';
     room.round = 1;
+    room.angelLastProtectedTargetId = null;
     room.phase = 'night';
     room.phaseEndsAt = Date.now() + NIGHT_SECONDS * 1000;
     room.actions = freshActions();
@@ -942,6 +947,9 @@ io.on('connection', (socket) => {
         { targetName: target.name, targetAvatar: target.avatar },
       );
     } else if (player.role === 'angel') {
+      if (target.id === room.angelLastProtectedTargetId) {
+        return error('You cannot protect the same player in consecutive rounds. Choose someone else this night.');
+      }
       room.actions.angelTarget = target.id;
     } else {
       return error('Your role has no night action.');
