@@ -11,11 +11,9 @@ import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import {
   getDiscussionSeconds,
   getMafiaCap,
-  chooseMafiaTarget,
   resolveVote,
   getWinner,
   getNightActionProgress,
-  allPlayersReady,
   allPlayersVoted,
   canTargetSelf,
 } from './rules.js';
@@ -66,9 +64,16 @@ let livekitRoomService = null;
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const AVATAR_IDS = new Set(['raven','skull','ghost','bat','wolf','cat','owl','spider','moth','snake','candle','rose','moon','pumpkin','key','crow','coffin','crystal','mask','poison','blackheart','eye','rose2','moon2']);
-const NIGHT_SECONDS = 55;
+const NIGHT_SECONDS = 90;
 const VOTE_SECONDS = 60;
 const TIE_SECONDS = 5 * 60;
+const MURDER_TRANSITION_MS = 7200;
+const QUIET_TRANSITION_MS = 5000;
+const ELIMINATION_TRANSITION_MS = 13200;
+const TIE_TRANSITION_MS = 9800;
+const NO_ELIMINATION_TRANSITION_MS = 10800;
+const MAFIA_CONFLICT_WINDOW_MS = 8000;
+const MAFIA_CONFLICT_EXTENSION_MS = 15000;
 const RECONNECT_GRACE_MS = 45_000;
 const ROOM_TTL_HOURS = 24;
 
@@ -152,9 +157,9 @@ const eliminationStories = [
 
 function roleDescription(role) {
   const descriptions = {
-    mafia: 'Choose one victim with your team each night. Every living Mafia member must agree on the same name.',
-    sheriff: 'Inspect one player each night. Your result is private.',
-    angel: 'Protect one player each night, including yourself. Your protection is never revealed.',
+    mafia: 'Choose a victim with your team. A single submitted target counts; conflicting choices trigger one final 15-second window.',
+    sheriff: 'Inspect one player each night. Your first choice locks permanently, and your result is shown only to you.',
+    angel: 'Protect one player each night, including yourself. You may change your choice until the night ends. Your protection is never revealed.',
     citizen: 'Listen, discuss, and vote to find the Mafia.',
   };
   return descriptions[role] ?? '';
@@ -166,7 +171,7 @@ function makeSnapshot(room, playerId) {
   if (!me) return null;
   const revealAll = room.status === 'finished';
   const mafiaTeam = me.role === 'mafia' && me.alive
-    ? room.players.filter((p) => p.role === 'mafia').map((p) => ({ id: p.id, name: p.name, alive: p.alive }))
+    ? room.players.filter((p) => p.role === 'mafia').map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, alive: p.alive }))
     : [];
   const myActionSubmitted = room.phase === 'night'
     ? (me.role === 'mafia' ? Boolean(room.actions.mafiaVotes[me.id])
@@ -180,7 +185,7 @@ function makeSnapshot(room, playerId) {
     ? room.players.filter((player) => player.alive && player.role === 'mafia').map((player) => {
         const targetId = room.actions.mafiaVotes?.[player.id];
         const target = targetId ? playerById(room, targetId) : null;
-        return { id: player.id, name: player.name, targetName: target?.alive ? target.name : null, submitted: Boolean(targetId) };
+        return { id: player.id, name: player.name, avatar: player.avatar, targetName: target?.alive ? target.name : null, submitted: Boolean(targetId) };
       })
     : [];
   return {
@@ -197,11 +202,20 @@ function makeSnapshot(room, playerId) {
       alive: player.alive,
       connected: player.connected,
       isHost: player.id === room.hostId,
-      role: revealAll || !player.alive ? player.role : null,
+      role: revealAll ? player.role : null,
     })),
     phase: room.phase,
     round: room.round,
     phaseEndsAt: room.phaseEndsAt,
+    transition: room.transition ? {
+      id: room.transition.id,
+      kind: room.transition.kind,
+      startedAt: room.transition.startedAt,
+      durationMs: room.transition.durationMs,
+      victimName: room.transition.victimName ?? null,
+      victimAvatar: room.transition.victimAvatar ?? null,
+    } : null,
+    voteReveal: room.phase === 'transition' ? (room.voteReveal ?? null) : null,
     announcement: room.announcement,
     lastDeathAnnouncement: room.lastDeathAnnouncement ?? null,
     winner: room.winner,
@@ -234,6 +248,9 @@ function makeSnapshot(room, playerId) {
           submitted: nightProgress.mafiaSubmitted,
           required: nightProgress.mafiaRequired,
           mafiaAgreed: nightProgress.mafiaDone,
+          conflicting: getMafiaVoteState(room).kind === 'conflict',
+          mafiaTargetState: getMafiaVoteState(room).kind,
+          conflictExtensionUsed: Boolean(room.mafiaConflictExtensionUsed),
         } : { submitted: 0, required: 0, mafiaAgreed: false }
       : ['voting', 'tieVoting'].includes(room.phase) ? {
           submitted: Object.keys(room.actions.dayVotes ?? {}).length,
@@ -288,7 +305,7 @@ async function initializeDatabase() {
   for (const row of rows) {
     const room = row.state;
     if (!room || !room.code || !Array.isArray(room.players)) continue;
-    for (const player of room.players) player.connected = false;
+    for (const player of room.players) { player.connected = false; player.disconnectAt = Date.now(); }
     room.hostGraceUntil = null;
     rooms.set(room.code, room);
   }
@@ -298,21 +315,30 @@ async function initializeDatabase() {
 
 function attachSocket(room, player, socket) {
   const currentHost = playerById(room, room.hostId);
-  if (!currentHost || !currentHost.connected) {
+  if (!currentHost || (!currentHost.connected && (!room.hostGraceUntil || Date.now() >= room.hostGraceUntil))) {
     room.hostId = player.id;
     room.hostGraceUntil = null;
   }
+
+  // Claim the new socket before disconnecting the old one. Otherwise the old
+  // socket's asynchronous disconnect event can mark this reconnected player offline.
   const previousSocketId = socketByPlayer.get(player.id);
-  if (previousSocketId && previousSocketId !== socket.id) {
-    io.to(previousSocketId).emit('session:replaced');
-    io.sockets.sockets.get(previousSocketId)?.disconnect(true);
-  }
   player.connected = true;
   player.disconnectAt = null;
   socket.data.code = room.code;
   socket.data.playerId = player.id;
   socket.join(`table:${room.code}`);
   socketByPlayer.set(player.id, socket.id);
+
+  if (previousSocketId && previousSocketId !== socket.id) {
+    const previousSocket = io.sockets.sockets.get(previousSocketId);
+    if (previousSocket) {
+      previousSocket.emit('session:replaced');
+      previousSocket.data.code = null;
+      previousSocket.data.playerId = null;
+      previousSocket.disconnect(true);
+    }
+  }
 }
 
 function emitRoom(room) {
@@ -331,9 +357,9 @@ async function commit(room) {
   await saveRoom(room);
 }
 
-function addPrivateResult(player, text, kind = 'info') {
+function addPrivateResult(player, text, kind = 'info', details = {}) {
   player.privateResults ??= [];
-  player.privateResults.unshift({ id: randomUUID(), text, kind, at: Date.now() });
+  player.privateResults.unshift({ id: randomUUID(), text, kind, ...details, at: Date.now() });
   player.privateResults = player.privateResults.slice(0, 12);
 }
 
@@ -343,11 +369,9 @@ function setDiscussion(room) {
   room.tieCandidates = [];
   room.actions.dayVotes = {};
   room.actions.dayReady = {};
-}
-
-function everyoneReadyForVote(room) {
-  const livingIds = livingPlayers(room).map((player) => player.id);
-  return allPlayersReady(livingIds, room.actions.dayReady ?? {});
+  room.transition = null;
+  room.voteReveal = null;
+  room.announcement = null;
 }
 
 function everyoneVoted(room) {
@@ -360,6 +384,8 @@ function beginVoting(room) {
   room.phaseEndsAt = Date.now() + VOTE_SECONDS * 1000;
   room.actions.dayVotes = {};
   room.actions.dayReady = {};
+  room.transition = null;
+  room.voteReveal = null;
   room.announcement = makeAnnouncement('phase', 'THE VOTE BEGINS', 'Choose the name you believe is hiding in the dark. The vote is private.', 'gold');
 }
 
@@ -369,12 +395,18 @@ function beginNextNight(room) {
   room.phaseEndsAt = Date.now() + NIGHT_SECONDS * 1000;
   room.actions = freshActions();
   room.tieCandidates = [];
+  room.transition = null;
+  room.voteReveal = null;
+  room.mafiaConflictExtensionUsed = false;
+  room.announcement = null;
 }
 
 function finishGame(room, winner) {
   room.status = 'finished';
   room.phase = 'finished';
   room.phaseEndsAt = null;
+  room.transition = null;
+  room.voteReveal = null;
   room.winner = winner;
   room.finishedAt = Date.now();
   room.announcement = makeAnnouncement(
@@ -392,6 +424,123 @@ function checkVictory(room) {
   if (!winner) return false;
   finishGame(room, winner);
   return true;
+}
+
+function reconcileAfterRosterChange(room) {
+  const winner = getWinner(room.players);
+  if (winner) {
+    finishGame(room, winner);
+    return true;
+  }
+  if (room.phase === 'transition' && room.transition?.pendingWinner) {
+    room.transition.pendingWinner = null;
+    room.transition.nextPhase = ['murder', 'quiet'].includes(room.transition.kind) ? 'discussion' : 'night';
+  }
+  return false;
+}
+
+function startTransition(room, kind, durationMs, nextPhase, pendingWinner = null) {
+  const startedAt = Date.now();
+  room.phase = 'transition';
+  room.phaseEndsAt = startedAt + durationMs;
+  room.transition = {
+    id: randomUUID(),
+    kind,
+    startedAt,
+    durationMs,
+    nextPhase,
+    pendingWinner,
+    victimName: room.announcement?.victimName ?? null,
+    victimAvatar: room.announcement?.victimAvatar ?? null,
+  };
+}
+
+function completeTransition(room) {
+  const transition = room.transition;
+  if (!transition) {
+    beginNextNight(room);
+    return;
+  }
+  if (transition.pendingWinner) {
+    finishGame(room, transition.pendingWinner);
+    return;
+  }
+  if (transition.nextPhase === 'discussion') {
+    setDiscussion(room);
+    return;
+  }
+  if (transition.nextPhase === 'tieVoting') {
+    room.phase = 'tieVoting';
+    room.phaseEndsAt = Date.now() + TIE_SECONDS * 1000;
+    room.transition = null;
+    room.voteReveal = null;
+    room.actions.dayVotes = {};
+    return;
+  }
+  beginNextNight(room);
+}
+
+function createVoteReveal(room) {
+  const rows = livingPlayers(room).map((voter) => {
+    const targetId = room.actions.dayVotes?.[voter.id] ?? null;
+    const target = targetId ? playerById(room, targetId) : null;
+    return {
+      voterId: voter.id,
+      voterName: voter.name,
+      voterAvatar: voter.avatar,
+      targetId,
+      targetName: target?.name ?? null,
+      targetAvatar: target?.avatar ?? null,
+    };
+  });
+  return { id: randomUUID(), rows, createdAt: Date.now() };
+}
+
+function getMafiaVoteState(room) {
+  const livingMafia = room.players.filter((player) => player.alive && player.role === 'mafia');
+  const votes = livingMafia
+    .map((player) => ({ playerId: player.id, targetId: room.actions.mafiaVotes?.[player.id] }))
+    .filter((vote) => vote.targetId && playerById(room, vote.targetId)?.alive);
+  const targets = [...new Set(votes.map((vote) => vote.targetId))];
+  if (targets.length === 0) return { kind: 'none', targetId: null, votes, counts: new Map() };
+  const counts = new Map();
+  for (const vote of votes) counts.set(vote.targetId, (counts.get(vote.targetId) ?? 0) + 1);
+  if (targets.length === 1) return { kind: 'single', targetId: targets[0], votes, counts };
+  return { kind: 'conflict', targetId: null, votes, counts };
+}
+
+function chooseMafiaTargetAtDeadline(room) {
+  const state = getMafiaVoteState(room);
+  if (state.kind === 'single') return state.targetId;
+  if (state.kind !== 'conflict') return null;
+  const ranked = [...state.counts.entries()].sort((a, b) => b[1] - a[1]);
+  if (ranked.length > 1 && ranked[0][1] === ranked[1][1]) return null;
+  return ranked[0]?.[0] ?? null;
+}
+
+function extendForMafiaConflict(room, now) {
+  if (room.mafiaConflictExtensionUsed || room.phase !== 'night') return false;
+  const remaining = (room.phaseEndsAt ?? 0) - now;
+  if (remaining > MAFIA_CONFLICT_WINDOW_MS) return false;
+  if (getMafiaVoteState(room).kind !== 'conflict') return false;
+  room.phaseEndsAt += MAFIA_CONFLICT_EXTENSION_MS;
+  room.mafiaConflictExtensionUsed = true;
+  return true;
+}
+
+function clearPlayerActions(room, player) {
+  delete room.actions.mafiaVotes?.[player.id];
+  delete room.actions.dayVotes?.[player.id];
+  delete room.actions.dayReady?.[player.id];
+  if (player.role === 'sheriff') room.actions.sheriffTarget = null;
+  if (player.role === 'angel') room.actions.angelTarget = null;
+  for (const [voterId, targetId] of Object.entries(room.actions.mafiaVotes ?? {})) {
+    if (targetId === player.id) delete room.actions.mafiaVotes[voterId];
+  }
+  for (const [voterId, targetId] of Object.entries(room.actions.dayVotes ?? {})) {
+    if (targetId === player.id) delete room.actions.dayVotes[voterId];
+  }
+  room.tieCandidates = (room.tieCandidates ?? []).filter((id) => id !== player.id);
 }
 
 function removeEliminatedPlayerFromVoice(room, player) {
@@ -413,6 +562,7 @@ function removeEliminatedPlayerFromVoice(room, player) {
 function forfeitPlayer(room, player) {
   if (!player || !player.alive) return false;
   player.alive = false;
+  player.connected = false;
   player.eliminatedAt = Date.now();
   removeEliminatedPlayerFromVoice(room, player);
   room.announcement = makeAnnouncement(
@@ -420,6 +570,7 @@ function forfeitPlayer(room, player) {
     'A SEAT FALLS SILENT',
     `${player.name} has abandoned the table. Their chair remains empty, and the house counts the silence as a final confession.`,
     'muted',
+    { victimName: player.name, victimAvatar: player.avatar },
   );
   room.lastDeathAnnouncement = room.announcement;
   return true;
@@ -437,7 +588,7 @@ function eliminatePlayer(room, targetId, type) {
       'A MURDER IN THE DARK',
       randomFrom(murderStories)(target.name),
       'red',
-      { victimName: target.name },
+      { victimName: target.name, victimAvatar: target.avatar },
     );
   } else {
     room.announcement = makeAnnouncement(
@@ -445,6 +596,7 @@ function eliminatePlayer(room, targetId, type) {
       'THE TABLE HAS PASSED ITS JUDGEMENT',
       randomFrom(eliminationStories)(target.name),
       'gold',
+      { victimName: target.name, victimAvatar: target.avatar },
     );
   }
   room.lastDeathAnnouncement = room.announcement;
@@ -453,66 +605,122 @@ function eliminatePlayer(room, targetId, type) {
 
 function resolveNight(room) {
   if (room.status !== 'playing' || room.phase !== 'night') return;
-  const livingIds = livingPlayers(room).map((player) => player.id);
-  const livingMafiaIds = room.players.filter((player) => player.alive && player.role === 'mafia').map((player) => player.id);
-  const murderTargetId = chooseMafiaTarget(room.actions.mafiaVotes, livingIds, livingMafiaIds);
+  const murderTargetId = chooseMafiaTargetAtDeadline(room);
   const protectedTargetId = room.actions.angelTarget;
   const sheriff = room.players.find((player) => player.alive && player.role === 'sheriff');
-  if (sheriff && room.actions.sheriffTarget) {
-    const inspected = playerById(room, room.actions.sheriffTarget);
-    if (inspected && inspected.alive) {
-      addPrivateResult(sheriff, `${inspected.name} is ${inspected.role === 'mafia' ? 'MAFIA' : 'NOT MAFIA'}.`, inspected.role === 'mafia' ? 'danger' : 'success');
-    }
-  }
+
   if (murderTargetId && murderTargetId !== protectedTargetId) {
     eliminatePlayer(room, murderTargetId, 'murder');
-  } else {
-    room.announcement = makeAnnouncement('quiet', 'THE NIGHT LEFT NO TRACE', 'No one was found at dawn. Whatever moved through the house kept its secret.', 'muted');
+    const winner = getWinner(room.players);
+    startTransition(room, 'murder', MURDER_TRANSITION_MS, winner ? 'finished' : 'discussion', winner);
+    return;
   }
-  if (checkVictory(room)) return;
-  setDiscussion(room);
+
+  // A saved target and a night with no valid target are deliberately indistinguishable.
+  room.announcement = makeAnnouncement(
+    'quiet',
+    'THE NIGHT LEFT NO TRACE',
+    'No one was found at dawn. Whatever moved through the house kept its secret.',
+    'muted',
+  );
+  const winner = getWinner(room.players);
+  startTransition(room, 'quiet', QUIET_TRANSITION_MS, winner ? 'finished' : 'discussion', winner);
 }
 
 function resolveDayVoting(room, isTieBreak = false) {
   const allowed = isTieBreak ? new Set(room.tieCandidates) : null;
+  room.voteReveal = createVoteReveal(room);
   const result = resolveVote(room.actions.dayVotes, allowed, isTieBreak);
+
   if (result.type === 'eliminate') {
     eliminatePlayer(room, result.targetId, 'elimination');
-    if (checkVictory(room)) return;
-    beginNextNight(room);
+    const winner = getWinner(room.players);
+    startTransition(room, 'elimination', ELIMINATION_TRANSITION_MS, winner ? 'finished' : 'night', winner);
     return;
   }
+
   if (result.type === 'tie') {
-    room.phase = 'tieVoting';
-    room.phaseEndsAt = Date.now() + TIE_SECONDS * 1000;
     room.tieCandidates = result.candidates;
     room.actions.dayVotes = {};
     const names = result.candidates.map((id) => playerById(room, id)?.name).filter(Boolean).join(' and ');
-    room.announcement = makeAnnouncement('tie', 'THE TABLE CANNOT AGREE', `${names} stand accused. Five minutes remain for the living to reconsider their votes. Only the tied candidates may receive votes.`, 'gold');
+    room.announcement = makeAnnouncement(
+      'tie',
+      'THE TABLE CANNOT AGREE',
+      `${names} stand accused. Five minutes remain for the living to reconsider their votes. Only the tied candidates may receive votes.`,
+      'gold',
+    );
+    startTransition(room, 'tie', TIE_TRANSITION_MS, 'tieVoting');
     return;
   }
+
   room.tieCandidates = [];
-  room.announcement = makeAnnouncement('no-elimination', 'NO ONE LEAVES THE TABLE', 'The votes remain divided. The table has reached no verdict, and no one is eliminated.', 'muted');
-  beginNextNight(room);
+  room.announcement = makeAnnouncement(
+    'no-elimination',
+    'NO ONE LEAVES THE TABLE',
+    'The votes remain divided. The table has reached no verdict, and no one is eliminated.',
+    'muted',
+  );
+  startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
 }
 
 async function tickRooms() {
   const now = Date.now();
-  for (const room of rooms.values()) {
+  for (const room of [...rooms.values()]) {
     let changed = false;
+
+    // A brief grace period lets someone recover from a refresh, network dip, or accidental tab close.
+    for (const player of [...room.players]) {
+      if (player.connected || !player.disconnectAt || now - player.disconnectAt < RECONNECT_GRACE_MS) continue;
+      player.disconnectAt = null;
+      player.tokenHash = null;
+      if (room.status === 'lobby') {
+        room.players = room.players.filter((entry) => entry.id !== player.id);
+      } else if (room.status === 'playing' && player.alive) {
+        forfeitPlayer(room, player);
+        clearPlayerActions(room, player);
+      }
+      if (room.hostId === player.id) {
+        room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id
+          ?? room.players.find((entry) => entry.id !== player.id)?.id
+          ?? null;
+        room.hostGraceUntil = null;
+      }
+      changed = true;
+    }
+
+    if (room.status === 'lobby' && room.players.length === 0) {
+      await deleteRoom(room.code);
+      continue;
+    }
+    if (changed && room.status === 'playing') {
+      if (reconcileAfterRosterChange(room)) {
+        // A disconnect can change the faction balance; publish the final verdict.
+      } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
+        room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
+        startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
+      } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
+        resolveDayVoting(room, room.phase === 'tieVoting');
+      }
+    }
+
     if (room.hostGraceUntil && now >= room.hostGraceUntil) {
       const nextHost = room.players.find((player) => player.connected)?.id;
       if (nextHost) room.hostId = nextHost;
       room.hostGraceUntil = null;
       changed = true;
     }
-    if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
+
+    if (room.status === 'playing' && room.phase === 'night' && extendForMafiaConflict(room, now)) {
+      changed = true;
+    } else if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
       if (room.phase === 'night') resolveNight(room);
       else if (room.phase === 'discussion') beginVoting(room);
       else if (room.phase === 'voting') resolveDayVoting(room, false);
       else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
+      else if (room.phase === 'transition') completeTransition(room);
       changed = true;
     }
+
     if (now - (room.lastActivityAt || room.createdAt || now) > ROOM_TTL_HOURS * 60 * 60 * 1000) {
       await deleteRoom(room.code);
       continue;
@@ -566,6 +774,7 @@ function withPlayer(socket, callback, handler) {
 io.on('connection', (socket) => {
   socket.on('room:create', async (payload = {}, ack) => {
     try {
+      if (socket.data.code && socket.data.playerId) return reply(ack, error('Leave your current table before creating another.'));
       const ip = socket.handshake.address || 'unknown';
       if (!ipAllowed(ip)) return reply(ack, error('Too many room attempts. Please wait a few minutes and try again.'));
       const name = cleanName(payload.name);
@@ -592,6 +801,9 @@ io.on('connection', (socket) => {
         phaseEndsAt: null,
         actions: freshActions(),
         tieCandidates: [],
+        transition: null,
+        voteReveal: null,
+        mafiaConflictExtensionUsed: false,
         announcement: makeAnnouncement('welcome', 'THE HOLLOW TABLE', 'The house has opened its doors. Invite only those you trust.', 'gold'),
         chat: [],
         winner: null,
@@ -608,6 +820,7 @@ io.on('connection', (socket) => {
 
   socket.on('room:join', async (payload = {}, ack) => {
     try {
+      if (socket.data.code && socket.data.playerId) return reply(ack, error('Leave your current table before joining another.'));
       const ip = socket.handshake.address || 'unknown';
       if (!ipAllowed(ip)) return reply(ack, error('Too many join attempts. Please wait a few minutes and try again.'));
       const code = String(payload.code || '').trim().toUpperCase();
@@ -644,7 +857,7 @@ io.on('connection', (socket) => {
       const room = rooms.get(code);
       if (!room || !token) return reply(ack, error('Saved table session not found.'));
       const tokenHash = hashToken(token);
-      const player = room.players.find((entry) => entry.tokenHash === tokenHash);
+      const player = room.players.find((entry) => entry.tokenHash && entry.tokenHash === tokenHash);
       if (!player) return reply(ack, error('This reconnect code is no longer valid.'));
       attachSocket(room, player, socket);
       if (room.hostId === player.id) room.hostGraceUntil = null;
@@ -696,6 +909,9 @@ io.on('connection', (socket) => {
     room.phaseEndsAt = Date.now() + NIGHT_SECONDS * 1000;
     room.actions = freshActions();
     room.tieCandidates = [];
+    room.transition = null;
+    room.voteReveal = null;
+    room.mafiaConflictExtensionUsed = false;
     room.announcement = makeAnnouncement('phase', 'NIGHT 1 · THE HOUSE GOES SILENT', 'Your role has been chosen. The doors are locked. The Mafia may now choose their victim.', 'red');
     room.players.forEach((entry) => { entry.privateResults = []; });
     await commit(room);
@@ -707,33 +923,36 @@ io.on('connection', (socket) => {
     if (!player.alive) return error('Ghosts cannot perform night actions.');
     const target = playerById(room, String(payload.targetId || ''));
     if (!target || !target.alive) return error('Choose a living player.');
-    if (target.id === player.id && !canTargetSelf(player.role)) return error('You cannot choose yourself.');
+    // Mafia may deliberately select themselves; other roles retain the rules.js restriction.
+    if (target.id === player.id && player.role !== 'mafia' && !canTargetSelf(player.role)) {
+      return error('You cannot choose yourself.');
+    }
     if (player.role === 'mafia') {
       room.actions.mafiaVotes[player.id] = target.id;
     } else if (player.role === 'sheriff') {
+      if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
       room.actions.sheriffTarget = target.id;
+      const isMafia = target.role === 'mafia';
+      addPrivateResult(
+        player,
+        `${target.name} is ${isMafia ? 'MAFIA' : 'NOT MAFIA'}.`,
+        isMafia ? 'danger' : 'success',
+        { targetName: target.name, targetAvatar: target.avatar },
+      );
     } else if (player.role === 'angel') {
       room.actions.angelTarget = target.id;
     } else {
       return error('Your role has no night action.');
     }
-    const progress = getNightActionProgress(room);
-    if (progress.allDone) resolveNight(room);
+    // Night actions remain open for the full 90-second phase; Angel and Mafia may revise choices.
     await commit(room);
     return success({ submitted: true });
   }));
 
-  socket.on('day:ready', withPlayer(socket, 'day:ready', async (room, player, payload) => {
+  socket.on('day:ready', withPlayer(socket, 'day:ready', async (room, player) => {
     if (room.status !== 'playing' || room.phase !== 'discussion') return error('The discussion phase is closed.');
     if (!player.alive) return error('Ghosts cannot ready the vote.');
-    room.actions.dayReady ??= {};
-    if (payload.ready === false) delete room.actions.dayReady[player.id];
-    else room.actions.dayReady[player.id] = true;
-    const ready = Boolean(room.actions.dayReady[player.id]);
-    const started = everyoneReadyForVote(room);
-    if (started) beginVoting(room);
-    await commit(room);
-    return success({ ready, started });
+    return success({ ready: false, started: false });
   }));
 
   socket.on('day:vote', withPlayer(socket, 'day:vote', async (room, player, payload) => {
@@ -747,6 +966,45 @@ io.on('connection', (socket) => {
     if (everyoneVoted(room)) resolveDayVoting(room, tieBreak);
     await commit(room);
     return success({ submitted: true, resolved: room.phase !== (tieBreak ? 'tieVoting' : 'voting') });
+  }));
+
+  socket.on('room:kick', withPlayer(socket, 'room:kick', async (room, host, payload) => {
+    if (room.hostId !== host.id) return error('Only the host can remove a guest.');
+    if (room.status === 'finished') return error('The game has already finished.');
+    const target = playerById(room, String(payload.playerId || ''));
+    if (!target) return error('That guest is no longer at the table.');
+    if (target.id === host.id) return error('The host cannot remove their own seat.');
+
+    const targetSocketId = socketByPlayer.get(target.id);
+    const targetSocket = targetSocketId ? io.sockets.sockets.get(targetSocketId) : null;
+    target.tokenHash = null;
+    target.connected = false;
+    target.disconnectAt = null;
+    socketByPlayer.delete(target.id);
+
+    if (room.status === 'lobby') {
+      room.players = room.players.filter((entry) => entry.id !== target.id);
+    } else if (room.status === 'playing') {
+      if (target.alive) forfeitPlayer(room, target);
+      clearPlayerActions(room, target);
+      const wonByRosterChange = reconcileAfterRosterChange(room);
+      if (!wonByRosterChange && room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
+        room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
+        startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
+      } else if (!wonByRosterChange && ['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
+        resolveDayVoting(room, room.phase === 'tieVoting');
+      }
+    }
+
+    if (targetSocket) {
+      targetSocket.emit('session:kicked', { reason: 'The host removed your seat from this table.' });
+      targetSocket.data.code = null;
+      targetSocket.data.playerId = null;
+      targetSocket.leave(`table:${room.code}`);
+      targetSocket.disconnect(true);
+    }
+    await commit(room);
+    return success({ removed: true, playerName: target.name });
   }));
 
   socket.on('chat:send', withPlayer(socket, 'chat:send', async (room, player, payload) => {
@@ -769,6 +1027,7 @@ io.on('connection', (socket) => {
 
   socket.on('room:leave', withPlayer(socket, 'room:leave', async (room, player) => {
     socketByPlayer.delete(player.id);
+    player.tokenHash = null;
     socket.leave(`table:${room.code}`);
     socket.data.code = null;
     socket.data.playerId = null;
@@ -787,32 +1046,17 @@ io.on('connection', (socket) => {
     if (room.status === 'playing') {
       forfeitPlayer(room, player);
       player.connected = false;
-      player.disconnectAt = Date.now();
-      delete room.actions.mafiaVotes[player.id];
-      delete room.actions.dayVotes[player.id];
-      delete room.actions.dayReady?.[player.id];
-      if (player.role === 'sheriff') room.actions.sheriffTarget = null;
-      if (player.role === 'angel') room.actions.angelTarget = null;
-      for (const [voterId, targetId] of Object.entries(room.actions.mafiaVotes)) {
-        if (targetId === player.id) delete room.actions.mafiaVotes[voterId];
-      }
-      for (const [voterId, targetId] of Object.entries(room.actions.dayVotes)) {
-        if (targetId === player.id) delete room.actions.dayVotes[voterId];
-      }
-      room.tieCandidates = room.tieCandidates.filter((candidateId) => candidateId !== player.id);
+      player.disconnectAt = null;
+      clearPlayerActions(room, player);
       if (room.hostId === player.id) {
         room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id ?? room.hostId;
         room.hostGraceUntil = null;
       }
-      if (checkVictory(room)) {
+      if (reconcileAfterRosterChange(room)) {
         // The departure itself may decide the game.
-      } else if (room.phase === 'night' && getNightActionProgress(room).allDone) {
-        resolveNight(room);
       } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
         beginNextNight(room);
         room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
-      } else if (room.phase === 'discussion' && everyoneReadyForVote(room)) {
-        beginVoting(room);
       } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
         resolveDayVoting(room, room.phase === 'tieVoting');
       }

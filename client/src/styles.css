@@ -502,3 +502,149 @@ h1, h2, h3, p { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   .murder-overlay, .murder-red-flash, .murder-knife, .murder-blood-burst, .murder-reveal-text { animation-duration: .01ms !important; animation-delay: 0ms !important; }
 }
+
+/* THE HOLLOW TABLE — THIRD VERSION: THE HAUNTED BUNGALOW */
+:root { --horror-red: #a92531; --horror-ember: #d08b70; --horror-ink: #070609; }
+.game-heading h1, .endgame-layout h1 { text-wrap: balance; }
+.game-layout { position: relative; isolation: isolate; }
+.haunted-mansion { position: absolute; inset: 0 0 auto; height: 49%; opacity: .92; overflow: hidden; pointer-events: none; mask-image: linear-gradient(to bottom, #000 68%, transparent 100%); }
+.haunted-mansion svg { width: 100%; height: 100%; filter: saturate(.82) contrast(1.14); }
+.table-stage { position: relative; overflow: hidden; }
+.table-stage::after { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: radial-gradient(ellipse at 50% 52%, transparent 24%, rgba(0,0,0,.14) 52%, rgba(0,0,0,.8) 100%), linear-gradient(180deg, rgba(0,0,0,.05), transparent 48%, rgba(8,4,6,.8)); }
+.seat-ring, .round-table, .table-haze { z-index: 3; }
+.seat { z-index: 4; width: 104px; }
+.seat-avatar { width: 66px; height: 66px; border: 2px solid rgba(177,111,94,.58); background: radial-gradient(circle at 35% 25%, #5b3a37, #160f13 72%); box-shadow: 0 0 0 4px rgba(6,4,5,.75), 0 0 26px rgba(148,40,43,.22), inset 0 0 16px rgba(0,0,0,.75); font-size: 34px; }
+.seat-name { width: 118px; padding: 6px 7px; border: 1px solid rgba(175,111,93,.3); background: rgba(8,5,7,.94); font-size: 12px; }
+.seat-targetable .seat-avatar { border-color: rgba(204,127,100,.72); box-shadow: 0 0 0 4px rgba(6,4,5,.82), 0 0 22px rgba(172,52,54,.38); }
+.seat-selected .seat-avatar { border-color: #e4a182; box-shadow: 0 0 0 4px rgba(6,4,5,.9), 0 0 0 7px rgba(172,48,52,.42), 0 0 32px rgba(219,66,62,.62); }
+.seat-dead .seat-avatar { filter: grayscale(.82) brightness(.64); opacity: .78; }
+.target-avatar, .mini-avatar, .chat-avatar, .reveal-avatar { font-size: 24px; }
+.target-option { min-height: 58px; }
+.target-avatar { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; }
+.mafia-stage-intel { position: relative; z-index: 5; display: grid; grid-template-columns: minmax(180px, .42fr) minmax(0, 1.5fr); align-items: center; gap: 18px; margin: 0 0 17px; padding: 16px 20px; border: 1px solid rgba(177,65,65,.46); border-radius: 7px; background: linear-gradient(112deg, rgba(38,12,17,.98), rgba(13,9,12,.96) 66%, rgba(32,16,18,.96)); box-shadow: 0 16px 42px rgba(0,0,0,.46), inset 0 1px rgba(255,255,255,.04), 0 0 28px rgba(140,30,34,.13); }
+.mafia-stage-heading { display: flex; flex-direction: column; gap: 4px; }
+.mafia-stage-heading small { color: #e09a83; font: 700 10px var(--mono); letter-spacing: .17em; }
+.mafia-stage-heading strong { color: #f3ddd0; font: 700 clamp(19px, 2vw, 26px)/1.05 var(--gothic); letter-spacing: .08em; }
+.mafia-stage-heading span { color: #a88a7e; font: 10px var(--mono); letter-spacing: .12em; }
+.mafia-stage-members { display: flex; flex-wrap: wrap; gap: 9px; }
+.mafia-stage-member { min-width: 150px; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid rgba(185,95,80,.28); background: rgba(0,0,0,.26); }
+.mafia-stage-avatar { width: 43px; height: 43px; flex: 0 0 43px; display: grid; place-items: center; border-radius: 50%; color: #f0d1bf; background: radial-gradient(circle at 35% 25%, #603a36, #170e12 72%); border: 1px solid rgba(210,130,101,.5); font-size: 26px; box-shadow: 0 0 18px rgba(173,42,45,.24); }
+.mafia-stage-member > span:last-child { display: flex; flex-direction: column; gap: 4px; }
+.mafia-stage-member strong { color: #f1dace; font: 700 16px var(--gothic); letter-spacing: .04em; }
+.mafia-stage-member small { color: #d18b79; font: 9px var(--mono); letter-spacing: .13em; }
+.mafia-stage-member.member-fallen { opacity: .55; filter: grayscale(.75); }
+.mafia-conflict-note { grid-column: 1 / -1; margin: 0; color: #f0a18c; font: 10px var(--mono); letter-spacing: .12em; text-align: center; }
+.mafia-member-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin-top: 12px; }
+.mafia-member { min-width: 0; display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 2px 9px; padding: 8px 10px; background: rgba(65,24,27,.25); border: 1px solid rgba(177,76,71,.26); }
+.mafia-member > span { grid-row: span 2; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; background: #271619; border: 1px solid rgba(199,126,103,.4); font-size: 25px; }
+.mafia-member strong { color: #f0d8ca; font: 700 15px var(--gothic); overflow-wrap: anywhere; }
+.mafia-member small { color: #bb8c7d; font: 9px var(--mono); letter-spacing: .1em; }
+.mafia-member.member-fallen { opacity: .55; filter: grayscale(.7); }
+.mafia-coordination p { line-height: 1.5; font-size: 10px; }
+.role-panel .mafia-team > small { color: #e3a18c; font: 700 10px var(--mono); letter-spacing: .14em; }
+.host-panel { border-color: rgba(190,117,87,.4) !important; }
+.host-panel-note { color: #bda79b; font: 14px/1.45 'IM Fell English', Georgia, serif; margin: -3px 0 12px; }
+.host-player-list { display: flex; flex-direction: column; gap: 7px; }
+.host-player-row { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border: 1px solid rgba(176,111,89,.2); background: rgba(0,0,0,.25); }
+.host-player-avatar { width: 35px; height: 35px; display: grid; place-items: center; background: #29191b; border-radius: 50%; font-size: 22px; }
+.host-player-name { min-width: 0; flex: 1; color: #e1d0c4; font: 15px var(--gothic); }
+.host-player-name small { display: block; margin-top: 2px; color: #9b8077; font: 8px var(--mono); letter-spacing: .1em; }
+.host-kick-button { flex: 0 0 auto; min-height: 30px; padding: 0 10px; border: 1px solid rgba(193,88,82,.5); color: #efb0a4; background: rgba(105,26,31,.28); font: 700 9px var(--mono); letter-spacing: .1em; cursor: pointer; }
+.host-kick-button:hover { color: #fff0e7; border-color: #df7a6d; background: rgba(143,34,39,.58); }
+.winner-banner { display: flex; flex-direction: column; gap: 5px; min-width: min(460px, 92vw); margin: 8px auto 18px; padding: 17px 26px 19px; border: 1px solid rgba(196,92,79,.56); background: linear-gradient(100deg, rgba(75,19,23,.78), rgba(23,12,14,.97)); box-shadow: 0 0 42px rgba(145,30,32,.22), inset 0 0 32px rgba(151,44,40,.12); }
+.winner-banner span { color: #c79a8d; font: 10px var(--mono); letter-spacing: .22em; }
+.winner-banner strong { color: #f3d8ca; font: 800 clamp(31px, 5vw, 54px)/1 var(--gothic); letter-spacing: .13em; text-shadow: 0 0 22px rgba(188,61,59,.35); }
+.winner-town { border-color: rgba(167,160,122,.47); background: linear-gradient(100deg, rgba(60,56,37,.56), rgba(20,16,14,.97)); }
+.winner-town strong { color: #e8dbb9; }
+
+/* Synchronized, full-screen scene changes */
+.cinematic-overlay { position: fixed; z-index: 1000; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: clamp(18px, 4vw, 54px); isolation: isolate; color: #f4e6dd; background: radial-gradient(ellipse at 50% 40%, #48151b 0%, #1b080e 48%, #040305 100%); animation: cinema-arrive .65s ease-out both; }
+.cinematic-overlay::before { content: ""; position: absolute; inset: -10%; z-index: -1; opacity: .5; background: repeating-radial-gradient(ellipse at 50% 50%, transparent 0 40px, rgba(175,23,35,.11) 42px 44px, transparent 48px 85px); animation: cinema-breathe 6s ease-in-out infinite alternate; }
+.cinematic-overlay::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; box-shadow: inset 0 0 22vw 7vw rgba(0,0,0,.78); background: linear-gradient(180deg, rgba(0,0,0,.32), transparent 22%, transparent 75%, rgba(0,0,0,.56)); }
+.cinematic-blood-wash { position: absolute; inset: 0; z-index: -1; background: radial-gradient(ellipse at 50% 48%, rgba(151,13,27,.43), transparent 65%), linear-gradient(120deg, rgba(95,5,18,.2), rgba(3,2,4,.5)); }
+.cinematic-skull { position: absolute; top: 5%; right: 5%; color: rgba(221,166,143,.1); font-size: clamp(90px, 18vw, 260px); line-height: 1; text-shadow: 0 0 45px rgba(161,25,32,.18); transform: rotate(12deg); pointer-events: none; }
+.cinematic-content { position: relative; z-index: 2; width: min(1040px, 100%); display: flex; align-items: center; flex-direction: column; gap: clamp(14px, 2.5vh, 26px); text-align: center; }
+.cinematic-prelude { max-width: 90vw; color: #e5b6a3; font: 700 clamp(11px, 1.3vw, 16px)/1.4 var(--mono); letter-spacing: clamp(.12em, .55vw, .32em); text-shadow: 0 0 22px rgba(207,69,66,.54); }
+.cinematic-title { max-width: 94vw; margin: 0; color: #fff0e7; font: 900 clamp(42px, 8.4vw, 112px)/.98 var(--gothic); letter-spacing: .015em; text-transform: uppercase; text-shadow: 0 3px 0 #3b050a, 0 0 24px rgba(232,49,52,.56), 0 16px 60px #000; overflow-wrap: anywhere; }
+.cinematic-subline { max-width: 730px; margin: 0; color: #c6a49b; font: 500 clamp(13px, 1.75vw, 19px)/1.55 'IM Fell English', Georgia, serif; letter-spacing: .06em; }
+.cinematic-victim-avatar { width: clamp(82px, 12vw, 142px); height: clamp(82px, 12vw, 142px); display: grid; place-items: center; border-radius: 50%; border: 2px solid rgba(237,165,140,.73); background: radial-gradient(circle at 34% 22%, #6e302e, #180a10 72%); box-shadow: 0 0 0 8px rgba(0,0,0,.35), 0 0 65px rgba(209,34,43,.55), inset 0 0 25px rgba(0,0,0,.75); font-size: clamp(48px, 7vw, 88px); animation: victim-rise .7s ease-out both; }
+.cinematic-knife { position: absolute; top: -5vh; left: calc(50% - 50px); z-index: 1; width: clamp(72px, 9vw, 122px); filter: drop-shadow(0 25px 22px rgba(0,0,0,.88)); transform-origin: 50% 5%; animation: third-knife-strike 1.2s cubic-bezier(.14,.78,.22,1) both; }
+.cinematic-knife svg { width: 100%; height: auto; }
+.cinematic-murder { background: radial-gradient(ellipse at 50% 42%, #7a101c 0%, #3a0710 48%, #080306 100%); }
+.cinematic-murder .cinematic-title { color: #ffddd2; text-shadow: 0 4px 0 #48050b, 0 0 34px rgba(255,25,40,.88), 0 18px 70px #000; }
+.cinematic-quiet { background: radial-gradient(ellipse at 50% 48%, #35252a 0%, #100b10 55%, #030304 100%); }
+.cinematic-quiet .cinematic-title { color: #e7d3c5; font-size: clamp(38px, 7vw, 88px); }
+.cinematic-votes { background: radial-gradient(ellipse at 50% 40%, #3d1219 0%, #17090e 60%, #040305 100%); }
+.vote-reveal-panel { position: relative; z-index: 2; width: min(1080px, 100%); max-height: 90vh; display: flex; flex-direction: column; gap: 14px; }
+.vote-reveal-title { margin: 0; text-align: center; color: #f0d9ce; font: 800 clamp(25px, 4.2vw, 46px)/1.1 var(--gothic); letter-spacing: .11em; }
+.vote-reveal-head { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 16px 9px; border-bottom: 1px solid rgba(207,126,108,.45); color: #d79f8d; font: 700 10px var(--mono); letter-spacing: .18em; }
+.vote-reveal-list { display: flex; flex-direction: column; gap: 7px; overflow: auto; padding: 2px 5px 10px; scrollbar-color: #874148 transparent; }
+.vote-reveal-row { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 12px; min-height: 49px; padding: 5px 14px; border: 1px solid rgba(190,106,93,.26); background: linear-gradient(90deg, rgba(50,15,21,.9), rgba(13,7,10,.93)); opacity: 0; transform: translateY(13px); animation: vote-row-appear .42s ease-out var(--row-delay, 0ms) forwards; }
+.vote-person, .vote-target { min-width: 0; display: flex; align-items: center; gap: 10px; color: #e9d4c8; }
+.vote-target { color: #efb09c; }
+.vote-person span, .vote-target span { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; border: 1px solid rgba(193,126,103,.38); border-radius: 50%; background: #261316; font-size: 19px; }
+.vote-person strong, .vote-target strong { font: 700 clamp(13px, 1.5vw, 17px) var(--gothic); overflow-wrap: anywhere; }
+.vote-reveal-empty { color: #c5a49a; text-align: center; font: 15px var(--mono); padding: 25px; }
+.cinematic-verdict { background: radial-gradient(ellipse at 50% 45%, #60121b 0%, #250910 52%, #040305 100%); }
+.cinematic-sleep { background: radial-gradient(ellipse at 50% 46%, #170e14 0%, #08060a 62%, #020203 100%); }
+.cinematic-sleep .cinematic-title { color: #d8c3b8; font-size: clamp(48px, 10vw, 132px); letter-spacing: .09em; }
+.sheriff-reveal-overlay { position: fixed; z-index: 1100; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 25px; text-align: center; background: radial-gradient(ellipse at center, rgba(79,15,23,.97), rgba(12,5,10,.985) 72%); border: 8px solid rgba(200,114,96,.18); box-shadow: inset 0 0 100px rgba(0,0,0,.75); animation: sheriff-result-in .28s ease-out both; }
+.sheriff-reveal-overlay > span { color: #ddac9e; font: 700 12px var(--mono); letter-spacing: .25em; }
+.sheriff-reveal-overlay h2 { max-width: 94vw; margin: 0; color: #fff0e5; font: 900 clamp(38px, 7vw, 88px)/1.06 var(--gothic); text-shadow: 0 0 32px rgba(220,54,55,.55), 0 7px 30px #000; overflow-wrap: anywhere; }
+.sheriff-reveal-overlay p { color: #b99d91; font: 10px var(--mono); letter-spacing: .17em; }
+.sheriff-reveal-overlay.sheriff-result-danger h2 { color: #ffaaa0; text-shadow: 0 0 35px rgba(245,32,42,.82), 0 7px 30px #000; }
+.sheriff-result-safe { background: radial-gradient(ellipse at center, rgba(48,42,30,.97), rgba(8,7,8,.99) 75%); }
+.sheriff-result-safe h2 { color: #f1dfc5; text-shadow: 0 0 30px rgba(196,167,107,.46), 0 7px 30px #000; }
+@keyframes cinema-arrive { from { opacity: 0; filter: brightness(2.5) blur(4px); } to { opacity: 1; filter: brightness(1) blur(0); } }
+@keyframes cinema-breathe { from { transform: scale(.96) rotate(-2deg); opacity: .23; } to { transform: scale(1.07) rotate(2deg); opacity: .62; } }
+@keyframes third-knife-strike { 0% { transform: translate(32vw,-115vh) rotate(-42deg) scale(1.25); } 58% { transform: translate(0,47vh) rotate(7deg) scale(1); } 72% { transform: translate(0,45vh) rotate(-3deg) scale(1.02); } 100% { transform: translate(0,18vh) rotate(4deg) scale(.86); opacity: .08; } }
+@keyframes victim-rise { from { opacity: 0; transform: scale(.72) translateY(18px); filter: blur(5px); } to { opacity: 1; transform: scale(1) translateY(0); filter: blur(0); } }
+@keyframes vote-row-appear { to { opacity: 1; transform: translateY(0); } }
+@keyframes sheriff-result-in { from { opacity: 0; transform: scale(1.04); } to { opacity: 1; transform: scale(1); } }
+@media (max-width: 780px) {
+  .mafia-stage-intel { grid-template-columns: 1fr; gap: 10px; padding: 13px; }
+  .mafia-stage-heading { align-items: center; text-align: center; }
+  .mafia-stage-members { justify-content: center; }
+  .mafia-stage-member { min-width: min(170px, 46%); }
+  .seat { width: 84px; }
+  .seat-avatar { width: 54px; height: 54px; font-size: 29px; }
+  .seat-name { width: 94px; font-size: 10px; }
+  .vote-reveal-panel { max-height: 92vh; gap: 9px; }
+  .vote-reveal-row { min-height: 42px; padding: 4px 8px; gap: 5px; }
+  .vote-person, .vote-target { gap: 6px; }
+  .vote-person span, .vote-target span { width: 28px; height: 28px; flex-basis: 28px; font-size: 17px; }
+}
+@media (max-width: 520px) {
+  .cinematic-overlay { padding: 16px 12px; }
+  .cinematic-prelude { font-size: 9px; letter-spacing: .12em; }
+  .cinematic-title { font-size: clamp(36px, 10vw, 54px); }
+  .cinematic-content { gap: 15px; }
+  .cinematic-victim-avatar { width: 86px; height: 86px; font-size: 52px; }
+  .cinematic-subline { font-size: 13px; }
+  .vote-reveal-head { font-size: 8px; padding: 0 7px 7px; }
+  .vote-person strong, .vote-target strong { font-size: 11px; }
+  .vote-reveal-row { grid-template-columns: .95fr 1.05fr; }
+  .sheriff-reveal-overlay { border-width: 4px; }
+  .sheriff-reveal-overlay > span { font-size: 9px; letter-spacing: .15em; }
+  .sheriff-reveal-overlay p { font-size: 8px; }
+  .mafia-stage-member { min-width: 100%; }
+  .host-player-name { font-size: 13px; }
+  .seat { width: 64px; }
+  .seat-avatar { width: 42px; height: 42px; font-size: 23px; }
+  .seat-name { width: 74px; font-size: 8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cinematic-overlay, .cinematic-overlay::before, .cinematic-knife, .cinematic-victim-avatar,
+  .vote-reveal-row, .sheriff-reveal-overlay { animation-duration: .01ms !important; animation-delay: 0ms !important; }
+}
+
+/* Final clarity and avatar prominence */
+.guest-row .mini-avatar { width: 40px; height: 40px; font-size: 25px; }
+.guest-row { min-height: 58px; }
+.reveal-player { grid-template-columns: 48px 1fr auto; min-height: 70px; gap: 5px 12px; padding: 13px 15px; }
+.reveal-avatar { font-size: 31px; }
+.reveal-name { color: #f0ded0; font: 700 17px var(--gothic); }
+.reveal-role { font: 11px var(--mono); }
+.reveal-state { font: 9px var(--mono); }
+.sheriff-target-avatar { width: clamp(72px, 9vw, 112px); height: clamp(72px, 9vw, 112px); display: grid; place-items: center; border: 2px solid rgba(218,154,120,.7); border-radius: 50%; background: radial-gradient(circle at 35% 25%, #593633, #170c11 72%); box-shadow: 0 0 35px rgba(172,44,48,.5), inset 0 0 24px rgba(0,0,0,.65); font-size: clamp(43px, 6vw, 68px); }
+@media (max-width: 520px) { .guest-row .mini-avatar { width: 36px; height: 36px; font-size: 22px; } .reveal-player { min-height: 64px; } .reveal-name { font-size: 15px; } }

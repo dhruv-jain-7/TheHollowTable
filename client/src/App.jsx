@@ -49,6 +49,7 @@ function phaseTitle(snapshot) {
   if (snapshot.phase === 'discussion') return `DAY ${snapshot.round} · OPEN DISCUSSION`;
   if (snapshot.phase === 'voting') return `DAY ${snapshot.round} · ELIMINATION VOTE`;
   if (snapshot.phase === 'tieVoting') return `DAY ${snapshot.round} · THE TIE-BREAK`;
+  if (snapshot.phase === 'transition') return 'THE HOUSE HOLDS ITS BREATH';
   return 'THE GAME IS OVER';
 }
 
@@ -57,6 +58,7 @@ function phaseDescription(snapshot) {
   if (snapshot.phase === 'discussion') return 'Speak carefully. Someone at this table is lying.';
   if (snapshot.phase === 'voting') return 'Choose the name that must leave the table.';
   if (snapshot.phase === 'tieVoting') return 'The vote is tied. Choose again.';
+  if (snapshot.phase === 'transition') return 'The house is deciding what happens next.';
   if (snapshot.phase === 'finished') return snapshot.winner === 'mafia' ? 'The Mafia own the house.' : 'The town has survived.';
   return '';
 }
@@ -115,6 +117,13 @@ function App() {
       setScreen('landing');
       flash('This seat was opened on another device. This tab has been signed out.', true);
     };
+    const onKicked = (payload = {}) => {
+      saveSession(null);
+      setSnapshot(null);
+      setScreen('landing');
+      setSelectedTarget('');
+      flash(payload.reason || 'The host removed your seat from this table.', true);
+    };
     const onConnect = async () => {
       if (!session?.code || !session?.token) return;
       const resumeKey = `${socket.id}:${session.code}:${session.token}`;
@@ -134,11 +143,13 @@ function App() {
     };
     socket.on('room:state', onState);
     socket.on('session:replaced', onReplaced);
+    socket.on('session:kicked', onKicked);
     socket.on('connect', onConnect);
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:state', onState);
       socket.off('session:replaced', onReplaced);
+      socket.off('session:kicked', onKicked);
       socket.off('connect', onConnect);
     };
   }, [session, saveSession, flash]);
@@ -192,6 +203,15 @@ function App() {
     if (!response.ok) flash(response.error, true);
   };
 
+  const kickPlayer = async (player) => {
+    if (!snapshot?.me?.isHost || !player || player.id === snapshot.me.id) return;
+    const action = snapshot.status === "playing" ? "forfeit this player's seat in the current game" : "remove this guest from the lobby";
+    if (!window.confirm(`Remove ${player.name}? This will ${action}.`)) return;
+    const response = await request('room:kick', { playerId: player.id });
+    if (!response?.ok) flash(response?.error || 'Could not remove this guest.', true);
+    else flash(`${player.name} was removed from the table.`);
+  };
+
   const leaveTable = async () => {
     if (snapshot?.status === 'playing' && !window.confirm('Leaving now counts as abandoning your seat. Your character will be removed from the living players. Continue?')) return;
     setLeaving(true);
@@ -229,11 +249,6 @@ function App() {
     const response = await request('day:vote', { targetId: selectedTarget });
     if (!response.ok) flash(response.error, true);
     else flash('Vote recorded.');
-  };
-
-  const readyToVote = async (ready) => {
-    const response = await request('day:ready', { ready });
-    if (!response.ok) flash(response.error, true);
   };
 
   const copyCode = async () => {
@@ -284,6 +299,7 @@ function App() {
           onStart={startGame}
           busy={busy}
           onCopy={copyCode}
+          onKickPlayer={kickPlayer}
         />
       )}
 
@@ -295,12 +311,14 @@ function App() {
           setSelectedTarget={setSelectedTarget}
           actNight={actNight}
           vote={vote}
-          readyToVote={readyToVote}
           messageText={messageText}
           setMessageText={setMessageText}
           sendChat={sendChat}
           chatEndRef={chatEndRef}
           session={session}
+          clock={clock}
+          serverOffset={serverOffset}
+          onKickPlayer={kickPlayer}
         />
       )}
 
@@ -382,7 +400,7 @@ function Landing({ name, setName, avatar, setAvatar, joinCode, setJoinCode, maxP
   );
 }
 
-function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy }) {
+function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer }) {
   const isHost = snapshot.me.isHost;
   const actualCap = Math.max(1, Math.floor((snapshot.players.length - 1) / 2));
   const canStart = snapshot.players.length >= 5 && mafiaCount <= actualCap;
@@ -431,7 +449,8 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
               <div className="guest-row" key={player.id}>
                 <div className={`mini-avatar avatar-tone-${index % 6}`}>{avatarFor(player.avatar).face}</div>
                 <div className="guest-name">{player.name}{player.isHost && <small>HOST</small>}</div>
-                <span className={`guest-status ${player.connected ? 'connected' : ''}`}><i /> {player.connected ? 'HERE' : 'AWAY'}</span>
+                <span className={`guest-status ${player.connected ? 'connected' : ''}`}><i /> {player.connected ? 'HERE' : 'RECONNECTING'}</span>
+                {isHost && player.id !== snapshot.me.id && <button className="host-kick-button" onClick={() => onKickPlayer(player)} title={`Remove ${player.name}`}>REMOVE</button>}
               </div>
             ))}
             {Array.from({ length: Math.max(0, Math.min(6, snapshot.settings.maxPlayers - snapshot.players.length)) }).map((_, index) => (
@@ -484,11 +503,116 @@ function MurderOverlay({ announcement }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, readyToVote, messageText, setMessageText, sendChat, chatEndRef, session }) {
+
+const VOTE_TABLE_MS = 6200;
+const ELIMINATION_VERDICT_END_MS = 10800;
+const NO_ELIMINATION_VERDICT_END_MS = 8500;
+
+function TypewriterText({ text, className = '', speed = 62 }) {
+  const [visibleText, setVisibleText] = useState('');
+  useEffect(() => {
+    setVisibleText('');
+    if (!text) return undefined;
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index += 1;
+      setVisibleText(text.slice(0, index));
+      if (index >= text.length) window.clearInterval(timer);
+    }, speed);
+    return () => window.clearInterval(timer);
+  }, [text, speed]);
+  return <span className={className}>{visibleText}</span>;
+}
+
+function CinematicTransition({ transition, announcement, voteReveal, elapsed }) {
+  if (!transition) return null;
+  const kind = transition.kind;
+  const victimName = transition.victimName || announcement?.victimName || 'A PLAYER';
+  const victimAvatar = avatarFor(transition.victimAvatar || announcement?.victimAvatar);
+
+  if (kind === 'murder') {
+    return (
+      <div className="cinematic-overlay cinematic-murder" role="alert" aria-live="assertive">
+        <div className="cinematic-blood-wash" />
+        <div className="cinematic-skull" aria-hidden="true">☠</div>
+        <div className="cinematic-knife" aria-hidden="true"><svg viewBox="0 0 120 360" role="presentation"><path d="M60 4 L94 207 L60 250 L26 207 Z" fill="#d7dce0" stroke="#f1e9e2" strokeWidth="4"/><path d="M60 250V340" stroke="#38201c" strokeWidth="25" strokeLinecap="round"/><path d="M30 267H90" stroke="#b58a5a" strokeWidth="17" strokeLinecap="round"/><path d="M60 259V332" stroke="#8f4a39" strokeWidth="4"/></svg></div>
+        <div className="cinematic-content">
+          <span className="cinematic-prelude"><TypewriterText key={transition.id + '-prelude'} text="THE HOUSE HAS GONE SILENT…" speed={82}/></span>
+          <div className="cinematic-victim-avatar">{victimAvatar.face}</div>
+          {elapsed >= 1100 && <h1 className="cinematic-title"><TypewriterText key={transition.id + '-victim'} text={`${victimName.toUpperCase()} IS MURDERED!`} speed={72}/></h1>}
+          <p className="cinematic-subline">NO ONE HEARD THE FINAL FOOTSTEP.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === 'quiet') {
+    return (
+      <div className="cinematic-overlay cinematic-quiet" role="status" aria-live="polite">
+        <div className="cinematic-blood-wash"/><div className="cinematic-skull" aria-hidden="true">☠</div>
+        <div className="cinematic-content"><span className="cinematic-prelude">THE DOORS OPEN AT DAWN</span><h1 className="cinematic-title"><TypewriterText key={transition.id + '-quiet'} text="IT WAS A QUIET NIGHT" speed={72}/></h1><p className="cinematic-subline">NO ONE WAS TAKEN. THE HOUSE KEEPS ITS SECRET.</p></div>
+      </div>
+    );
+  }
+
+  const rows = voteReveal?.rows ?? [];
+  const showingVotes = elapsed < VOTE_TABLE_MS;
+  const showingVerdict = kind === 'elimination' ? elapsed >= VOTE_TABLE_MS && elapsed < ELIMINATION_VERDICT_END_MS
+    : kind === 'tie' ? elapsed >= VOTE_TABLE_MS && elapsed < (transition.durationMs - 1200)
+      : kind === 'no-elimination' ? elapsed >= VOTE_TABLE_MS && elapsed < NO_ELIMINATION_VERDICT_END_MS : false;
+  const showingSleep = !showingVotes && !showingVerdict;
+
+  return (
+    <div className={`cinematic-overlay cinematic-${showingVotes ? 'votes' : showingSleep ? 'sleep' : 'verdict'}`} role="alert" aria-live="assertive">
+      <div className="cinematic-blood-wash"/><div className="cinematic-skull" aria-hidden="true">☠</div>
+      {showingVotes ? (
+        <div className="vote-reveal-panel">
+          <span className="cinematic-prelude">THE ELIMINATION VOTE IS COMPLETE</span>
+          <h1 className="vote-reveal-title">WHO VOTED FOR WHOM</h1>
+          <div className="vote-reveal-head"><span>PLAYER</span><span>VOTED AGAINST</span></div>
+          <div className="vote-reveal-list">
+            {rows.map((row, index) => (
+              <div className="vote-reveal-row" key={row.voterId} style={{'--row-delay': `${Math.min(index * 220, 3300)}ms`}}>
+                <div className="vote-person"><span>{avatarFor(row.voterAvatar).face}</span><strong>{row.voterName}</strong></div>
+                <div className="vote-target"><span>{row.targetName ? avatarFor(row.targetAvatar).face : '—'}</span><strong>{row.targetName || 'DID NOT VOTE'}</strong></div>
+              </div>
+            ))}
+            {rows.length === 0 && <div className="vote-reveal-empty">NO VOTES WERE CAST.</div>}
+          </div>
+        </div>
+      ) : showingVerdict ? (
+        <div className="cinematic-content">
+          {kind === 'elimination' ? <><span className="cinematic-prelude">THE TABLE HAS MADE ITS CHOICE</span><div className="cinematic-victim-avatar">{victimAvatar.face}</div><h1 className="cinematic-title"><TypewriterText key={transition.id + '-elimination'} text={`${victimName.toUpperCase()} IS ELIMINATED!`} speed={74}/></h1><p className="cinematic-subline">THEIR SEAT WILL REMAIN EMPTY.</p></>
+            : kind === 'tie' ? <><span className="cinematic-prelude">THE TABLE CANNOT AGREE</span><h1 className="cinematic-title"><TypewriterText key={transition.id + '-tie'} text="THE VOTE IS TIED" speed={72}/></h1><p className="cinematic-subline">THE ACCUSED WILL FACE ONE FINAL VOTE.</p></>
+              : <><span className="cinematic-prelude">THE BALLOTS HAVE BEEN COUNTED</span><h1 className="cinematic-title"><TypewriterText key={transition.id + '-none'} text="NO ONE IS ELIMINATED" speed={72}/></h1><p className="cinematic-subline">THE HOUSE HAS ACCEPTED NO VERDICT.</p></>}
+        </div>
+      ) : (
+        <div className="cinematic-content cinematic-sleep-content"><span className="cinematic-prelude">THE CANDLES ARE GOING OUT</span><h1 className="cinematic-title"><TypewriterText key={transition.id + '-sleep'} text="TOWN, SLEEP." speed={95}/></h1><p className="cinematic-subline">THE NIGHT BELONGS TO THE HOUSE.</p></div>
+      )}
+    </div>
+  );
+}
+
+function SheriffRevealOverlay({ result }) {
+  if (!result) return null;
+  return (
+    <div className={`sheriff-reveal-overlay ${result.kind === 'danger' ? 'sheriff-result-danger' : 'sheriff-result-safe'}`} role="alert" aria-live="assertive">
+      <div className="cinematic-skull" aria-hidden="true">☠</div>
+      <span>PRIVATE INVESTIGATION</span>
+      <div className="sheriff-target-avatar">{avatarFor(result.targetAvatar).face}</div>
+      <h2><TypewriterText key={result.id} text={result.text.toUpperCase()} speed={48}/></h2>
+      <p>ONLY YOU CAN SEE THIS RESULT</p>
+    </div>
+  );
+}
+
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer }) {
   const isNight = snapshot.phase === 'night';
   const isDiscussion = snapshot.phase === 'discussion';
   const isVoting = snapshot.phase === 'voting';
   const isTie = snapshot.phase === 'tieVoting';
+  const isTransition = snapshot.phase === 'transition';
+  const transitionElapsed = snapshot.transition?.startedAt ? Math.max(0, clock + serverOffset - snapshot.transition.startedAt) : 0;
   const isRoleAction = isNight && ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role);
   const isVotePhase = isVoting || isTie;
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
@@ -496,7 +620,8 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && ['angel', 'mafia'].includes(snapshot.me.role))) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
   const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
   const [identityVisible, setIdentityVisible] = useState(true);
-  const [murderEffect, setMurderEffect] = useState(null);
+  const [sheriffReveal, setSheriffReveal] = useState(null);
+  const seenSheriffResultRef = useRef(snapshot.me.privateResults?.[0]?.id || null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIdentityVisible(false), 8500);
@@ -504,15 +629,14 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   }, []);
 
   useEffect(() => {
-    if (snapshot.announcement?.kind !== 'murder') {
-      setMurderEffect(null);
-      return undefined;
-    }
-    const announcement = snapshot.announcement;
-    setMurderEffect(announcement);
-    const timer = window.setTimeout(() => setMurderEffect(null), 4200);
+    const latestResult = snapshot.me.privateResults?.[0];
+    if (snapshot.me.role !== 'sheriff' || !latestResult || latestResult.id === seenSheriffResultRef.current) return undefined;
+    seenSheriffResultRef.current = latestResult.id;
+    setSheriffReveal(latestResult);
+    const timer = window.setTimeout(() => setSheriffReveal(null), 2800);
     return () => window.clearTimeout(timer);
-  }, [snapshot.announcement?.id]);
+  }, [snapshot.me.privateResults?.[0]?.id, snapshot.me.role]);
+
   const timerUrgent = countdown != null && countdown < 60_000;
   const chatTitle = isNight ? 'THE WHISPERS' : 'THE TABLE WHISPERS';
 
@@ -525,20 +649,11 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
     <section className="game-layout">
       <div className="game-topline">
         <div><span className="room-pill">TABLE {snapshot.code}</span><span className="round-pill">ROUND {snapshot.round}</span></div>
-        <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : snapshot.phase === 'voting' ? 'VOTING ENDS IN' : 'TIME'}</small><strong>{phaseTimer}</strong></div>
+        {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
       </div>
       <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
 
-      {isDiscussion && snapshot.me.alive && (
-        <div className="ready-vote-card">
-          <div className="ready-vote-count">{snapshot.discussionReadiness.ready}<span> / {snapshot.discussionReadiness.required} READY</span></div>
-          <button className={snapshot.me.readyToVote ? 'ready-button is-ready' : 'ready-button'} onClick={() => readyToVote(!snapshot.me.readyToVote)} aria-pressed={snapshot.me.readyToVote}>
-            {snapshot.me.readyToVote ? 'READY · WAITING' : 'READY TO VOTE'}
-          </button>
-        </div>
-      )}
-
-      {snapshot.announcement && (
+      {snapshot.announcement && !isTransition && (
         <div key={snapshot.announcement.id} className={`announcement announcement-${snapshot.announcement.accent || 'red'}`}>
           <div className="announcement-side">✦</div>
           <div><div className="announcement-kicker">{snapshot.announcement.kind === 'murder' ? 'MURDER REPORT' : snapshot.announcement.kind === 'elimination' ? 'ELIMINATION REPORT' : snapshot.announcement.kind === 'departure' ? 'DEPARTURE REPORT' : 'A MESSAGE FROM THE HOUSE'}</div><h2>{snapshot.announcement.title}</h2><p className="typewriter-text">{snapshot.announcement.text}</p></div>
@@ -546,17 +661,76 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         </div>
       )}
 
-      {murderEffect && <MurderOverlay announcement={murderEffect} />}
+      {isTransition && <CinematicTransition transition={snapshot.transition} announcement={snapshot.announcement} voteReveal={snapshot.voteReveal} elapsed={transitionElapsed} />}
+      {sheriffReveal && <SheriffRevealOverlay result={sheriffReveal} />}
+
+      {snapshot.me.role === 'mafia' && snapshot.me.alive && identityVisible && (
+        <section className="mafia-stage-intel" aria-label="Private Mafia team">
+          <div className="mafia-stage-heading"><small>CLASSIFIED · MAFIA ONLY</small><strong>THE INNER CIRCLE</strong><span>{snapshot.me.mafiaTeam.length} IN THE HOUSE</span></div>
+          <div className="mafia-stage-members">
+            {snapshot.me.mafiaTeam.map((member) => (
+              <div className={`mafia-stage-member ${member.alive ? '' : 'member-fallen'}`} key={member.id}>
+                <span className="mafia-stage-avatar">{avatarFor(member.avatar).face}</span>
+                <span><strong>{member.name}{member.id === snapshot.me.id ? ' · YOU' : ''}</strong><small>{member.alive ? 'IN THE HUNT' : 'FALLEN'}</small></span>
+              </div>
+            ))}
+          </div>
+          {isNight && snapshot.actionProgress?.conflicting && <p className="mafia-conflict-note">CONFLICTING TARGETS · THE HOUSE MAY GRANT ONE 15-SECOND EXTENSION</p>}
+          {isNight && snapshot.actionProgress?.conflictExtensionUsed && <p className="mafia-conflict-note">THE EXTRA 15 SECONDS HAVE BEEN GRANTED</p>}
+        </section>
+      )}
 
       <div className="game-main-grid">
         <section className={`table-stage ${isNight ? 'table-night' : ''}`}>
           <div className="haunted-mansion" aria-hidden="true">
             <svg viewBox="0 0 900 360" preserveAspectRatio="xMidYMid slice">
-              <path d="M0 360V280L62 280V224L104 224V170L142 224V280H205V236L250 236V180L292 236V280H344V145L388 105L432 145V280H468V193L507 193V145L542 193V280H592V225L634 225V165L676 225V280H725V248L770 248V196L813 248V280H900V360Z" fill="#080708" />
-              <path d="M330 145L388 76L447 145M460 194L507 124L553 194M590 225L634 145L678 225" fill="none" stroke="#6c3436" strokeWidth="9" />
-              <path d="M378 76V25M507 124V66M634 145V87M104 170V120M770 196V145" stroke="#6c3436" strokeWidth="5" />
-              <path d="M368 205H384V235H368ZM411 205H427V235H411ZM488 215H503V240H488ZM521 215H536V240H521ZM620 241H634V265H620ZM650 241H664V265H650ZM128 245H142V270H128ZM760 260H774V278H760Z" fill="#a34b43" opacity=".65" />
-              <path d="M0 302Q160 278 300 306T600 302T900 295V360H0Z" fill="#050505" />
+              <defs>
+                <linearGradient id="bungalowSky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#08070d"/><stop offset=".62" stopColor="#1d1017"/><stop offset="1" stopColor="#090708"/></linearGradient>
+                <radialGradient id="bungalowMoon"><stop offset="0" stopColor="#e8cdb0" stopOpacity=".58"/><stop offset="1" stopColor="#bb7e73" stopOpacity="0"/></radialGradient>
+                <linearGradient id="bungalowWall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#40302d"/><stop offset="1" stopColor="#120e11"/></linearGradient>
+                <filter id="windowGlow"><feGaussianBlur stdDeviation="7"/></filter>
+              </defs>
+              <rect width="900" height="360" fill="url(#bungalowSky)"/>
+              <circle cx="710" cy="80" r="110" fill="url(#bungalowMoon)"/>
+              <circle cx="710" cy="80" r="37" fill="#c9ad98" opacity=".23"/>
+              <path d="M0 230Q130 190 265 235T520 218T900 218V360H0Z" fill="#080709"/>
+              <g fill="#070609" stroke="#20141a" strokeWidth="4">
+                <path d="M0 280V103L36 55L72 103V280ZM20 124L36 88L54 124V280H20Z"/>
+                <path d="M825 290V82L864 25L900 82V290Z"/>
+                <path d="M94 295V155L128 99L160 155V295Z"/>
+                <path d="M760 296V170L790 120L820 170V296Z"/>
+              </g>
+              <g fill="#1a1116" stroke="#4a292e" strokeWidth="5">
+                <path d="M208 190L450 42L692 190V323H208Z"/>
+                <path d="M177 190L450 20L723 190L694 204L450 62L205 204Z" fill="#0c090d" stroke="#6e343b" strokeWidth="8"/>
+                <path d="M270 192V118L450 72L630 118V192Z" fill="#24171c"/>
+                <path d="M300 192V145L450 105L600 145V192Z" fill="#0b080c" stroke="#78464a" strokeWidth="3"/>
+                <path d="M246 194H654V324H246Z" fill="url(#bungalowWall)"/>
+                <path d="M390 324V235Q450 185 510 235V324Z" fill="#09070a" stroke="#9a6252" strokeWidth="5"/>
+                <path d="M414 324V247Q450 212 486 247V324Z" fill="#1c1016" stroke="#4c282d" strokeWidth="3"/>
+                <path d="M190 195H710V211H190Z" fill="#100b10" stroke="#4c292f" strokeWidth="3"/>
+              </g>
+              <g fill="#a34b43" opacity=".9" filter="url(#windowGlow)">
+                <rect x="286" y="216" width="48" height="53"/><rect x="566" y="216" width="48" height="53"/>
+                <rect x="390" y="142" width="34" height="39"/><rect x="476" y="142" width="34" height="39"/>
+              </g>
+              <g fill="#d58a62" opacity=".5">
+                <rect x="292" y="220" width="36" height="45"/><rect x="572" y="220" width="36" height="45"/>
+                <rect x="395" y="146" width="25" height="31"/><rect x="481" y="146" width="25" height="31"/>
+              </g>
+              <g fill="#080609" stroke="#593038" strokeWidth="3">
+                <path d="M352 326V292L450 251L548 292V326Z"/>
+                <path d="M80 320L82 266L101 255L119 266L121 320ZM760 323L764 271L783 260L801 271L805 323Z"/>
+                <path d="M130 328L137 295L145 328ZM700 330L707 294L715 330Z"/>
+              </g>
+              <g fill="#b84746" opacity=".7">
+                <path d="M0 326Q130 295 245 330T490 323T720 330T900 318V360H0Z"/>
+                <path d="M377 360Q450 308 523 360Z" fill="#0b080a"/>
+              </g>
+              <g fill="none" stroke="#bb7772" strokeOpacity=".13" strokeWidth="20">
+                <path d="M-30 280Q100 235 250 281T550 275T930 270"/>
+                <path d="M-30 324Q130 285 270 325T560 320T930 316"/>
+              </g>
             </svg>
           </div>
           <div className="table-haze haze-a" /><div className="table-haze haze-b" />
@@ -570,7 +744,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
                   if (targetPlayers.some((target) => target.id === player.id) && (isRoleAction || isVotePhase)) setSelectedTarget(player.id);
                 }}
                 disabled={!targetPlayers.some((target) => target.id === player.id) || (!isRoleAction && !isVotePhase)}
-                title={`${player.name}${player.alive ? '' : ` · ${ROLE_NAMES[player.role] || player.role}`}`}
+                title={player.name}
               >
                 <span className={`seat-avatar avatar-tone-${snapshot.players.findIndex((item) => item.id === player.id) % 6}`}>{avatarFor(player.avatar).face}</span>
                 <span className="seat-name">{player.name}{player.id === snapshot.me.id ? ' · YOU' : ''}</span>
@@ -600,12 +774,12 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             <h2>{ROLE_NAMES[snapshot.me.role] || 'Unknown'}</h2>
             <p>{snapshot.me.roleDescription}</p>
             {snapshot.me.role === 'mafia' && (
-              <div className="mafia-team"><small>YOUR INNER CIRCLE</small>{snapshot.me.mafiaTeam.map((member) => <span key={member.id}>{member.name}{member.id === snapshot.me.id ? ' (YOU)' : ''}{!member.alive ? ' · DEAD' : ''}</span>)}
+              <div className="mafia-team"><small>YOUR INNER CIRCLE</small><div className="mafia-member-list">{snapshot.me.mafiaTeam.map((member) => <div className={`mafia-member ${member.alive ? '' : 'member-fallen'}`} key={member.id}><span>{avatarFor(member.avatar).face}</span><strong>{member.name}{member.id === snapshot.me.id ? ' · YOU' : ''}</strong><small>{member.alive ? 'ALIVE' : 'FALLEN'}</small></div>)}</div>
                 <div className="mafia-coordination">
                   {snapshot.mafiaChoices?.map((choice) => (
                     <div key={choice.id}><span>{choice.name}</span><strong>{choice.targetName ? `→ ${choice.targetName}` : 'CHOOSING'}</strong></div>
                   ))}
-                  <p>{snapshot.actionProgress?.mafiaAgreed ? 'THE TEAM HAS AGREED' : 'ALL LIVING MAFIA MUST CHOOSE THE SAME NAME'}</p>
+                  <p>{snapshot.actionProgress?.mafiaTargetState === 'conflict' ? 'CONFLICTING TARGETS · FINAL WINDOW MAY OPEN' : snapshot.actionProgress?.mafiaTargetState === 'single' ? 'A TARGET HAS BEEN SUBMITTED' : 'WAITING FOR A TARGET'}</p>
                 </div>
               </div>
             )}
@@ -615,12 +789,14 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             </section>}
           </div>
 
-          {((isRoleAction && identityVisible) || isVotePhase) && (
+          {(isRoleAction || isVotePhase) && (
             <section className="panel action-panel">
               <div className="panel-kicker">{isNight ? 'PRIVATE NIGHT ACTION' : 'CAST YOUR VOTE'}</div>
               <h3>{isNight ? 'Choose one living player' : isTie ? 'Choose between the accused' : 'Who should leave the table?'}</h3>
               {isTie && <p className="action-subtext">Choose only between the names still accused.</p>}
-              {isNight && snapshot.me.role === 'mafia' && <p className="action-subtext">Every living Mafia member must choose the same name. You can change your choice until they agree.</p>}
+              {isNight && snapshot.me.role === 'mafia' && <p className="action-subtext">Choose a target. If only one target is submitted, that player is selected; conflicting targets earn one 15-second extension. You may revise your choice until the night ends.</p>}
+              {isNight && snapshot.me.role === 'angel' && <p className="action-subtext">Choose who to protect. You may change your protection until the night ends.</p>}
+              {isNight && snapshot.me.role === 'sheriff' && <p className="action-subtext">Your first investigation is final. The result will appear privately in a full-screen reveal at dawn.</p>}
               {targetPlayers.length > 0 ? (
                 <div className="target-list">
                   {targetPlayers.map((player) => (
@@ -630,12 +806,28 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
                   ))}
                 </div>
               ) : <p className="empty-targets">No valid targets are available.</p>}
-              <button className="primary-button full-button" onClick={isNight ? actNight : vote} disabled={!selectedTarget}>{snapshot.me.myActionSubmitted ? 'UPDATE ACTION' : isNight ? 'CONFIRM ACTION' : 'SUBMIT / CHANGE VOTE'}</button>
+              <button className="primary-button full-button" onClick={isNight ? actNight : vote} disabled={!selectedTarget || (isNight && snapshot.me.role === 'sheriff' && snapshot.me.myActionSubmitted)}>{isNight && snapshot.me.role === 'sheriff' && snapshot.me.myActionSubmitted ? 'INVESTIGATION LOCKED' : snapshot.me.myActionSubmitted ? 'UPDATE ACTION' : isNight ? 'CONFIRM ACTION' : 'SUBMIT / CHANGE VOTE'}</button>
 
             </section>
           )}
 
           {isNight && !isRoleAction && <div className="panel waiting-panel"><div className="waiting-orbit">☾</div><h3>The town is asleep</h3><p>Wait for the morning bell. The night actions are hidden from you.</p></div>}
+
+          {snapshot.me.isHost && (
+            <section className="panel host-panel">
+              <div className="panel-header"><div><div className="panel-kicker">HOST AUTHORITY</div><h2>Manage the table</h2></div><span className="panel-symbol">♜</span></div>
+              <p className="host-panel-note">Remove a guest who is disrupting the game or cannot return. Their role stays secret until the final reveal.</p>
+              <div className="host-player-list">
+                {snapshot.players.filter((player) => player.id !== snapshot.me.id).map((player) => (
+                  <div className="host-player-row" key={player.id}>
+                    <span className="host-player-avatar">{avatarFor(player.avatar).face}</span>
+                    <span className="host-player-name">{player.name}<small>{!player.connected ? 'OFFLINE' : !player.alive ? 'FALLEN' : 'IN GAME'}</small></span>
+                    <button className="host-kick-button" onClick={() => onKickPlayer(player)}>REMOVE</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="panel chat-panel">
             <div className="panel-header"><div><div className="panel-kicker">LIVE CONVERSATION</div><h2>{chatTitle}</h2></div><span className="panel-symbol">☷</span></div>
@@ -667,10 +859,10 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 function EndGame({ snapshot, onLeave }) {
   return (
     <>
-      {snapshot.lastDeathAnnouncement?.kind === 'murder' && <MurderOverlay announcement={snapshot.lastDeathAnnouncement} />}
       <section className="endgame-layout">
       <div className="eyebrow"><span /> THE FINAL VERDICT <span /></div>
       <div className={`endgame-seal ${snapshot.winner === 'mafia' ? 'seal-mafia' : 'seal-town'}`}>{snapshot.winner === 'mafia' ? '☠' : '✧'}</div>
+      <div className={`winner-banner ${snapshot.winner === 'mafia' ? 'winner-mafia' : 'winner-town'}`}><span>THE WINNING FACTION</span><strong>{snapshot.winner === 'mafia' ? 'THE MAFIA' : 'THE TOWN'}</strong></div>
       <h1>{snapshot.winner === 'mafia' ? 'The house belongs to the Mafia.' : 'The town survives the night.'}</h1>
       <p>{snapshot.announcement?.text}</p>
       {snapshot.lastDeathAnnouncement && (
