@@ -52,8 +52,13 @@ function formatTime(milliseconds) {
   return `${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
 }
 
+// HOLLOW_STAGE_4_5_IN_PERSON_NIGHT_FLOW: render the sequential In-Person night without changing Online presentation.
 function phaseTitle(snapshot) {
   if (snapshot.status === 'lobby') return 'THE GUESTS ARE GATHERING';
+  if (snapshot.phase === 'night' && snapshot.gameMode === 'in_person') {
+    const labels = { role_reveal: 'SEAL YOUR IDENTITY', town_sleep: 'THE TOWN MUST SLEEP', mafia: 'THE MAFIA AWAKENS', mafia_clash: 'CLASH OF OPINIONS', mafia_sleep: 'THE MAFIA RETURNS TO DARKNESS', angel: 'THE ANGEL AWAKENS', angel_sleep: 'THE HOUSE FALLS QUIET', sheriff: 'THE SHERIFF AWAKENS', sheriff_sleep: 'THE LAST SECRET IS SEALED', town_wake: 'DAWN APPROACHES' };
+    return `NIGHT ${snapshot.round} · ${labels[snapshot.nightStep] || 'THE MURDER HOUR'}`;
+  }
   if (snapshot.phase === 'night') return `NIGHT ${snapshot.round} · THE MURDER HOUR`;
   if (snapshot.phase === 'discussion') return `DAY ${snapshot.round} · OPEN DISCUSSION`;
   if (snapshot.phase === 'voting') return `DAY ${snapshot.round} · ELIMINATION VOTE`;
@@ -63,10 +68,31 @@ function phaseTitle(snapshot) {
 }
 
 function phaseDescription(snapshot) {
+  if (snapshot.phase === 'night' && snapshot.gameMode === 'in_person') {
+    const descriptions = {
+      role_reveal: 'Read your identity in private. The night begins as soon as everyone connected has entered, or when the short reveal window closes.',
+      town_sleep: 'Everyone close your eyes. The house is preparing its first call.',
+      mafia: 'Only the living Mafias may act. Choose a living target; every connected Mafia must agree before the night can continue.',
+      mafia_clash: 'The Mafia choices are divided. Change your target before the final 15 seconds expire; a lasting disagreement means no murder.',
+      mafia_sleep: 'The Mafia decision is sealed. All phones remain silent while the next role is summoned.',
+      angel: 'Only the Angel may act. Confirm one living soul to protect; the choice locks immediately.',
+      angel_sleep: 'The protection is sealed. Keep your eyes closed.',
+      sheriff: 'Only the Sheriff may act. Investigate one living player; the result is private to this phone.',
+      sheriff_sleep: 'The investigation is sealed. Keep your eyes closed until dawn.',
+      town_wake: 'The night is complete. The house is bringing everyone back to the table.',
+    };
+    return descriptions[snapshot.nightStep] || 'The house is silent. Keep your eyes closed.';
+  }
   if (snapshot.phase === 'night') return 'The house is silent. Choose your action in secret.';
-  if (snapshot.phase === 'discussion') return 'Speak carefully. Voting opens as soon as every living player is ready, or when the discussion clock expires.';
-  if (snapshot.phase === 'voting') return 'You have up to 100 seconds. Voting closes as soon as every living player has submitted a choice.';
-  if (snapshot.phase === 'tieVoting') return 'The vote is tied. You have up to 100 seconds to choose between the remaining accused.';
+  if (snapshot.phase === 'discussion') return snapshot.gameMode === 'in_person'
+    ? 'Speak across the physical table. Voting opens as soon as every connected living player is ready, or when the discussion clock expires.'
+    : 'Speak carefully. Voting opens as soon as every living player is ready, or when the discussion clock expires.';
+  if (snapshot.phase === 'voting') return snapshot.gameMode === 'in_person'
+    ? 'You have up to 30 seconds. Voting closes as soon as every connected living player has submitted a choice.'
+    : 'You have up to 100 seconds. Voting closes as soon as every living player has submitted a choice.';
+  if (snapshot.phase === 'tieVoting') return snapshot.gameMode === 'in_person'
+    ? 'The vote is tied. You have up to 30 seconds to choose between the remaining accused.'
+    : 'The vote is tied. You have up to 100 seconds to choose between the remaining accused.';
   if (snapshot.phase === 'transition') return 'The house is deciding what happens next.';
   if (snapshot.phase === 'finished') return snapshot.winner === 'mafia' ? 'The Mafia own the house.' : 'The town has survived.';
   return '';
@@ -289,6 +315,12 @@ function App() {
     else setMessageText('');
   };
 
+  const readyIdentity = async () => {
+    if (snapshot?.gameMode !== 'in_person') return;
+    const response = await request('identity:ready');
+    if (!response.ok) flash(response.error || 'Could not confirm your identity card.', true);
+  };
+
   const actNight = async () => {
     if (!selectedTarget) return flash('Choose a player first.', true);
     const response = await request('night:act', { targetId: selectedTarget });
@@ -409,6 +441,7 @@ function App() {
           serverOffset={serverOffset}
           onKickPlayer={kickPlayer}
           onReadyToVote={readyToVote}
+          onIdentityReady={readyIdentity}
         />
       )}
 
@@ -761,19 +794,23 @@ function SheriffRevealOverlay({ result }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote }) {
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady }) {
+  const isInPerson = snapshot.gameMode === 'in_person';
   const isNight = snapshot.phase === 'night';
+  const isMafiaWakeStep = ['mafia', 'mafia_clash'].includes(snapshot.nightStep);
   const isDiscussion = snapshot.phase === 'discussion';
   const isVoting = snapshot.phase === 'voting';
   const isTie = snapshot.phase === 'tieVoting';
   const isTransition = snapshot.phase === 'transition';
   const transitionElapsed = snapshot.transition?.startedAt ? Math.max(0, clock + serverOffset - snapshot.transition.startedAt) : 0;
-  const isRoleAction = isNight && snapshot.me.alive && ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role);
+  const isRoleAction = isNight && snapshot.me.alive && (isInPerson
+    ? (snapshot.me.role === 'mafia' ? isMafiaWakeStep : snapshot.me.role === 'angel' ? snapshot.nightStep === 'angel' : snapshot.me.role === 'sheriff' ? snapshot.nightStep === 'sheriff' : false)
+    : ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role));
   const isVotePhase = snapshot.me.alive && (isVoting || isTie);
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
   const alivePlayers = snapshot.players.filter((player) => player.alive);
   const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && ['angel', 'mafia'].includes(snapshot.me.role))) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
-  const voiceEnabled = snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
+  const voiceEnabled = !isInPerson && snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
   const identityStorageKey = `hollow-role-seen:${snapshot.code}:${snapshot.me.id}`;
   const [identityVisible, setIdentityVisible] = useState(false);
   // Always show the private role reveal when a player enters the live game.
@@ -798,6 +835,17 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
     }
   });
 
+  const identityReadySentRef = useRef(false);
+
+  useEffect(() => {
+    // A reconnecting player must not remain trapped behind the card overlay after
+    // the room has already moved beyond the shared identity-reveal barrier.
+    if (isInPerson && isNight && snapshot.nightStep !== 'role_reveal' && identitySequence !== 'done') {
+      setIdentitySequence('done');
+      setIdentityVisible(true);
+    }
+  }, [isInPerson, isNight, snapshot.nightStep, identitySequence]);
+
   useEffect(() => {
     if (identitySequence !== 'countdown') return undefined;
     let value = 3;
@@ -818,6 +866,10 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
     try { sessionStorage.setItem(identityStorageKey, 'seen'); } catch { /* The card still works without storage. */ }
     setIdentitySequence('done');
     setIdentityVisible(true);
+    if (isInPerson && !identityReadySentRef.current) {
+      identityReadySentRef.current = true;
+      onIdentityReady?.();
+    }
   };
 
   useEffect(() => {
@@ -866,7 +918,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
       )}
       <div className="game-topline">
         <div><span className="room-pill">TABLE {snapshot.code}</span><span className="round-pill">ROUND {snapshot.round}</span></div>
-        {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
+        {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{isInPerson && isNight ? (snapshot.nightStep === 'role_reveal' ? 'IDENTITY WINDOW' : snapshot.nightStep === 'mafia_clash' ? 'FINAL MAFIA WINDOW' : ['mafia', 'angel', 'sheriff'].includes(snapshot.nightStep) ? 'ACTION WINDOW' : 'THE HOUSE MOVES') : snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
       </div>
       <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
 
@@ -878,10 +930,17 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         </div>
       )}
 
+      {isInPerson && isNight && snapshot.nightCue && (
+        <section className={`in-person-night-banner in-person-step-${snapshot.nightStep}`} key={snapshot.nightCue.id}>
+          <div className="in-person-night-sigil" aria-hidden="true">{snapshot.nightStep === 'mafia_clash' ? '⚔' : snapshot.nightStep === 'angel' ? '✧' : snapshot.nightStep === 'sheriff' ? '⌖' : '☾'}</div>
+          <div className="in-person-night-copy"><small>THE VOICE OF THE HOUSE · {String(snapshot.nightStep || '').replaceAll('_', ' ').toUpperCase()}</small><h2>{snapshot.nightCue.title}</h2><p>{snapshot.nightCue.text}</p>{snapshot.nightStep === 'role_reveal' && snapshot.identityReadiness && <span className="in-person-identity-progress">{snapshot.identityReadiness.ready} / {snapshot.identityReadiness.required} HAVE ENTERED</span>}</div>
+          <span className="in-person-night-edge" aria-hidden="true" />
+        </section>
+      )}
       {isTransition && <CinematicTransition transition={snapshot.transition} announcement={snapshot.announcement} voteReveal={snapshot.voteReveal} elapsed={transitionElapsed} />}
       {sheriffReveal && <SheriffRevealOverlay result={sheriffReveal} />}
 
-      {snapshot.me.role === 'mafia' && snapshot.me.alive && identityVisible && (
+      {snapshot.me.role === 'mafia' && snapshot.me.alive && identityVisible && (!isInPerson || !isNight || isMafiaWakeStep) && (
         <section className="mafia-stage-intel" aria-label="Private Mafia team">
           <div className="mafia-stage-heading"><small>CLASSIFIED · MAFIA ONLY</small><strong>THE INNER CIRCLE</strong><span>{snapshot.me.mafiaTeam.length} IN THE HOUSE</span></div>
           <div className="mafia-stage-members">
@@ -993,7 +1052,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               <div className="mafia-team"><small>YOUR INNER CIRCLE</small><div className="mafia-member-list">{snapshot.me.mafiaTeam.map((member) => <div className={`mafia-member ${member.alive ? '' : 'member-fallen'}`} key={member.id}><span>{avatarFor(member.avatar).face}</span><strong>{member.name}{member.id === snapshot.me.id ? ' · YOU' : ''}</strong><small>{member.alive ? 'ALIVE' : 'FALLEN'}</small></div>)}</div>
                 <div className="mafia-coordination">
                   {snapshot.mafiaChoices?.map((choice) => (
-                    <div key={choice.id}><span>{choice.name}</span><strong>{choice.targetName ? `→ ${choice.targetName}` : 'CHOOSING'}</strong></div>
+                    <div key={choice.id}><span>{choice.name}</span><strong>{choice.targetName ? `→ ${choice.targetName}` : choice.connected ? 'CHOOSING' : 'OFFLINE · SKIPPED'}</strong></div>
                   ))}
                   <p>{snapshot.actionProgress?.mafiaTargetState === 'conflict' ? 'CONFLICTING TARGETS · FINAL WINDOW MAY OPEN' : snapshot.actionProgress?.mafiaTargetState === 'single' ? 'A TARGET HAS BEEN SUBMITTED' : 'WAITING FOR A TARGET'}</p>
                 </div>
@@ -1022,9 +1081,10 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               <div className="panel-kicker">{isNight ? 'PRIVATE NIGHT ACTION' : 'CAST YOUR VOTE'}</div>
               <h3>{isNight ? 'Choose one living player' : isTie ? 'Choose between the accused' : 'Who should leave the table?'}</h3>
               {isTie && <p className="action-subtext">Choose only between the names still accused.</p>}
-              {isNight && snapshot.me.role === 'mafia' && <p className="action-subtext">Choose a target. If only one target is submitted, that player is selected; conflicting targets earn one 15-second extension. You may revise your choice until the night ends.</p>}
-              {isNight && snapshot.me.role === 'angel' && <p className="action-subtext">Choose who to protect. You may change your protection until the night ends.</p>}
-              {isNight && snapshot.me.role === 'sheriff' && <p className="action-subtext">Your first investigation is final. The result will appear privately in a full-screen reveal at dawn.</p>}
+              {isNight && snapshot.me.role === 'mafia' && <p className="action-subtext">{isInPerson ? 'Choose a living target. Every connected Mafia phone must submit. Any disagreement opens the 15-second CLASH OF OPINIONS window; if the Mafias still disagree, there is no murder.' : 'Choose a target. If only one target is submitted, that player is selected; conflicting targets earn one 15-second extension. You may revise your choice until the night ends.'}</p>}
+              {isNight && snapshot.me.role === 'angel' && <p className="action-subtext">{isInPerson ? 'Choose one living soul to protect. Your first confirmation seals the choice and advances the night immediately.' : 'Choose who to protect. You may change your protection until the night ends.'}</p>}
+              {isNight && snapshot.me.role === 'sheriff' && <p className="action-subtext">{isInPerson ? 'Choose one living soul to investigate. Your result appears only on this phone, then the night advances.' : 'Your first investigation is final. The result will appear privately in a full-screen reveal at dawn.'}</p>}
+              {isInPerson && snapshot.me.role === 'mafia' && <div className="in-person-action-progress"><span>{snapshot.actionProgress?.submitted || 0} / {snapshot.actionProgress?.required || 0} MAFIA SUBMISSIONS</span><i><b style={{ width: `${snapshot.actionProgress?.required ? (snapshot.actionProgress.submitted / snapshot.actionProgress.required) * 100 : 0}%` }} /></i></div>}
               {targetPlayers.length > 0 ? (
                 <div className="target-list">
                   {targetPlayers.map((player) => (
@@ -1034,12 +1094,12 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
                   ))}
                 </div>
               ) : <p className="empty-targets">No valid targets are available.</p>}
-              <button className="primary-button full-button" onClick={isNight ? actNight : vote} disabled={!selectedTarget || (isNight && snapshot.me.role === 'sheriff' && snapshot.me.myActionSubmitted)}>{isNight && snapshot.me.role === 'sheriff' && snapshot.me.myActionSubmitted ? 'INVESTIGATION LOCKED' : snapshot.me.myActionSubmitted ? 'UPDATE ACTION' : isNight ? 'CONFIRM ACTION' : 'SUBMIT / CHANGE VOTE'}</button>
+              <button className="primary-button full-button" onClick={isNight ? actNight : vote} disabled={!selectedTarget || (isNight && isInPerson && ['angel', 'sheriff'].includes(snapshot.me.role) && snapshot.me.myActionSubmitted) || (isNight && !isInPerson && snapshot.me.role === 'sheriff' && snapshot.me.myActionSubmitted)}>{isNight && isInPerson && snapshot.me.myActionSubmitted && snapshot.me.role === 'angel' ? 'PROTECTION SEALED' : isNight && snapshot.me.myActionSubmitted && snapshot.me.role === 'sheriff' ? 'INVESTIGATION LOCKED' : isNight && isInPerson && snapshot.me.role === 'angel' ? 'SEAL PROTECTION' : isNight && isInPerson && snapshot.me.role === 'sheriff' ? 'SEAL INVESTIGATION' : snapshot.me.myActionSubmitted ? (isInPerson ? 'UPDATE TARGET' : 'UPDATE ACTION') : isNight ? (isInPerson ? 'SUBMIT TARGET' : 'CONFIRM ACTION') : 'SUBMIT / CHANGE VOTE'}</button>
 
             </section>
           )}
 
-          {isNight && !isRoleAction && snapshot.me.alive && <div className="panel waiting-panel"><div className="waiting-orbit">☾</div><h3>The town is asleep</h3><p>Wait for the morning bell. The night actions are hidden from you.</p></div>}
+          {isNight && !isRoleAction && snapshot.me.alive && <div className={`panel waiting-panel ${isInPerson ? 'in-person-waiting-panel' : ''}`}><div className="waiting-orbit">☾</div><h3>{isInPerson ? 'KEEP YOUR EYES CLOSED' : 'The town is asleep'}</h3><p>{isInPerson ? 'The house has not summoned your role. Keep your phone silent and your eyes closed; your private action will appear only when it is your turn.' : 'Wait for the morning bell. The night actions are hidden from you.'}</p></div>}
           {!snapshot.me.alive && <div className="panel ghost-observer-panel"><div className="waiting-orbit">👁</div><h3>You are beyond the table</h3><p>The dead cannot vote, chat, or take night actions. Watch silently until the final verdict.</p></div>}
 
           {snapshot.me.isHost && (
@@ -1065,6 +1125,14 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             </div>
           )}
 
+          {isInPerson ? (
+            <section className="panel chat-panel in-person-room-reminder">
+              <div className="panel-kicker">THE GATHERING IS PHYSICAL</div>
+              <h2>THE ROOM IS YOUR VOICE</h2>
+              <p>Speak across the table during daylight. At night, keep every phone silent and follow only the private call meant for your role.</p>
+              <span>NO LIVEKIT · NO PHONE CHAT · ONE NARRATOR DEVICE</span>
+            </section>
+          ) : (
           <section className="panel chat-panel">
             <div className="panel-header"><div><div className="panel-kicker">LIVE CONVERSATION</div><h2>{chatTitle}</h2></div><span className="panel-symbol">☷</span></div>
             <div className={isNight && !identityVisible ? 'voice-concealed' : ''}>
@@ -1085,6 +1153,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               <button type="submit" disabled={!messageText.trim() || !snapshot.me.alive}>↗</button>
             </form>
           </section>
+          )}
         </aside>
       </div>
 
