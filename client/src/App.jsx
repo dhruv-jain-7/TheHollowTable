@@ -121,6 +121,8 @@ function App() {
   const [joinCode, setJoinCode] = useState('');
   const [maxPlayers, setMaxPlayers] = useState(10);
   const [mafiaCount, setMafiaCount] = useState(2);
+  // HOLLOW_STAGE_2_MODE_SELECTION: the selected mode is saved on the server with the room.
+  const [gameMode, setGameMode] = useState('online');
   const [selectedTarget, setSelectedTarget] = useState('');
   const [messageText, setMessageText] = useState('');
   const [leaving, setLeaving] = useState(false);
@@ -208,7 +210,7 @@ function App() {
     setErrorMessage('');
     if (name.trim().length < 2) return flash('Enter a nickname with at least two characters.', true);
     setBusy(true);
-    const response = await request('room:create', { name, avatar, maxPlayers });
+    const response = await request('room:create', { name, avatar, maxPlayers, gameMode });
     setBusy(false);
     if (!response.ok) return flash(response.error, true);
     saveSession({ code: response.code, token: response.token });
@@ -221,7 +223,7 @@ function App() {
     if (name.trim().length < 2) return flash('Enter a nickname with at least two characters.', true);
     if (!/^[A-HJ-NP-Z2-9]{4}$/.test(joinCode.trim().toUpperCase())) return flash('Enter the four-character table code.', true);
     setBusy(true);
-    const response = await request('room:join', { code: joinCode, name, avatar });
+    const response = await request('room:join', { code: joinCode, name, avatar, gameMode });
     setBusy(false);
     if (!response.ok) return flash(response.error, true);
     saveSession({ code: response.code, token: response.token });
@@ -317,7 +319,7 @@ function App() {
       <header className="topbar">
         <button className="brand-lockup" onClick={() => snapshot ? null : setScreen('landing')} aria-label="The Hollow Table home">
           <span className="brand-mark">✦</span>
-          <span><strong>THE HOLLOW TABLE</strong><small>AN ONLINE SOCIAL DEDUCTION GAME</small></span>
+          <span><strong>THE HOLLOW TABLE</strong><small>A SOCIAL DEDUCTION HORROR GAME</small></span>
         </button>
         <div className="topbar-right">
           <span className="online-indicator"><i /> {socket.connected ? 'SERVER CONNECTED' : 'RECONNECTING'}</span>
@@ -330,6 +332,7 @@ function App() {
       {!snapshot && (
         <Landing
           name={name} setName={setName}
+          gameMode={gameMode} setGameMode={setGameMode}
           avatar={avatar} setAvatar={setAvatar}
           joinCode={joinCode} setJoinCode={setJoinCode}
           maxPlayers={maxPlayers} setMaxPlayers={(value) => { setMaxPlayers(value); setMafiaCount((current) => Math.min(current, Math.max(1, Math.floor((value - 1) / 2)))); }}
@@ -401,7 +404,7 @@ function AvatarPicker({ selected, onSelect }) {
   );
 }
 
-function Landing({ name, setName, avatar, setAvatar, joinCode, setJoinCode, maxPlayers, setMaxPlayers, createTable, joinTable, busy }) {
+function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, joinCode, setJoinCode, maxPlayers, setMaxPlayers, createTable, joinTable, busy }) {
   const [mode, setMode] = useState('create');
   return (
     <section className="landing-layout">
@@ -409,6 +412,20 @@ function Landing({ name, setName, avatar, setAvatar, joinCode, setJoinCode, maxP
         <div className="eyebrow"><span /> THE HOUSE IS WAITING <span /></div>
         <h1>Some secrets<br /><em>never stay buried.</em></h1>
         <p className="landing-lede">Gather your circle. Take your seat. Find the liar before the house claims you all.</p>
+        <div className="landing-mode-selector" role="group" aria-label="Choose how you will gather">
+          <button type="button" className={`landing-mode-card ${gameMode === 'online' ? 'selected' : ''}`} onClick={() => setGameMode('online')} aria-pressed={gameMode === 'online'}>
+            <span className="landing-mode-kicker">PLAY ONLINE</span>
+            <strong>SUMMON FROM AFAR</strong>
+            <small>The distance will not keep you safe.</small>
+            <i aria-hidden="true">✦</i>
+          </button>
+          <button type="button" className={`landing-mode-card ${gameMode === 'in_person' ? 'selected' : ''}`} onClick={() => setGameMode('in_person')} aria-pressed={gameMode === 'in_person'}>
+            <span className="landing-mode-kicker">PLAY IN PERSON</span>
+            <strong>GATHER AT THE TABLE</strong>
+            <small>Sit close. Close your eyes. Trust no one.</small>
+            <i aria-hidden="true">☾</i>
+          </button>
+        </div>
         <div className="landing-features">
           <div><b>01</b><span>PRIVATE TABLES<br /><small>Four-character invite code</small></span></div>
           <div><b>02</b><span>SECRET ROLES<br /><small>Mafia, Sheriff, Angel, Citizen</small></span></div>
@@ -433,13 +450,13 @@ function Landing({ name, setName, avatar, setAvatar, joinCode, setJoinCode, maxP
             <div className="setting-row"><span className="field-label">TABLE CAPACITY</span><strong>{maxPlayers} PLAYERS</strong></div>
             <input className="range-input" type="range" min="5" max="16" value={maxPlayers} onChange={(event) => setMaxPlayers(Number(event.target.value))} />
             <div className="range-labels"><span>5 MIN</span><span>16 MAX</span></div>
-            <button className="primary-button full-button" onClick={createTable} disabled={busy}>{busy ? 'OPENING THE HOUSE…' : 'CREATE A PRIVATE TABLE'} <span>↗</span></button>
+            <button className="primary-button full-button" onClick={createTable} disabled={busy}>{busy ? 'OPENING THE HOUSE…' : gameMode === 'in_person' ? 'GATHER THE TABLE' : 'OPEN A DISTANT TABLE'} <span>↗</span></button>
           </>
         ) : (
           <>
             <label className="field-label" htmlFor="table-code">FOUR-CHARACTER TABLE CODE</label>
             <input id="table-code" className="dark-input code-input" value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 4))} placeholder="X7K9" maxLength={4} />
-            <button className="primary-button full-button" onClick={joinTable} disabled={busy}>{busy ? 'FINDING YOUR TABLE…' : 'TAKE YOUR SEAT'} <span>↗</span></button>
+            <button className="primary-button full-button" onClick={joinTable} disabled={busy}>{busy ? 'FINDING YOUR TABLE…' : gameMode === 'in_person' ? 'JOIN THE GATHERING' : 'ANSWER THE SUMMONS'} <span>↗</span></button>
           </>
         )}
         <p className="privacy-note"><span>♙</span> Private by code. No public matchmaking. No account required.</p>
@@ -483,6 +500,12 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
         <h1>Take your <em>seat.</em></h1>
         <p>Invite your circle. When at least five souls have arrived, the host may begin.</p>
       </div>
+      {snapshot.gameMode === 'in_person' && (
+        <div className="mode-unlock-banner">
+          <strong>GATHER AT THE TABLE</strong>
+          <span>IN-PERSON PLAY IS BEING BUILT IN STAGES. THIS ROOM IS RESERVED, BUT THE GAME WILL UNLOCK WHEN THE NARRATOR AND SEQUENTIAL NIGHT FLOW ARE READY.</span>
+        </div>
+      )}
       <div className="lobby-grid">
         <section className="panel code-panel">
           <div className="panel-kicker">YOUR PRIVATE TABLE CODE</div>
@@ -514,7 +537,7 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
               <div className="setting-block"><div className="setting-row"><label>Mafia members</label><strong>{localMafia}</strong></div><input className="range-input" type="range" min="1" max={Math.max(1, Math.floor((localMax - 1) / 2))} value={localMafia} onChange={(event) => changeMafia(event.target.value)} /></div>
               <div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>4 MIN</b> DISCUSSION FLOOR</span></div>
               {snapshot.players.length >= 5 && mafiaCount > actualCap && <p className="warning-note">With {snapshot.players.length} players, reduce Mafia to {actualCap} or fewer before starting.</p>}
-              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart}>{busy ? 'AWAKENING THE HOUSE…' : 'BEGIN THE GAME'} <span>↗</span></button>
+              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || snapshot.gameMode === 'in_person'}>{snapshot.gameMode === 'in_person' ? 'IN-PERSON MODE · NOT READY YET' : busy ? 'AWAKENING THE HOUSE…' : 'BEGIN THE GAME'} <span>↗</span></button>
               <p className="host-note">You are the host. Roles are assigned secretly by the server.</p>
             </>
           ) : (

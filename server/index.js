@@ -190,6 +190,7 @@ function makeSnapshot(room, playerId) {
     : [];
   return {
     code: room.code,
+    gameMode: room.gameMode === 'in_person' ? 'in_person' : 'online',
     serverNow: Date.now(),
     status: room.status,
     hostId: room.hostId,
@@ -305,6 +306,8 @@ async function initializeDatabase() {
   for (const row of rows) {
     const room = row.state;
     if (!room || !room.code || !Array.isArray(room.players)) continue;
+    // HOLLOW_STAGE_2_MODE_SELECTION: rooms saved before this update remain Online.
+    room.gameMode = room.gameMode === 'in_person' ? 'in_person' : 'online';
     for (const player of room.players) { player.connected = false; player.disconnectAt = Date.now(); }
     // Give the original host a reconnect window after a server restart/deploy.
     // Without this, the first guest to resume can accidentally take host ownership.
@@ -786,6 +789,7 @@ io.on('connection', (socket) => {
       const name = cleanName(payload.name);
       const avatar = AVATAR_IDS.has(String(payload.avatar)) ? String(payload.avatar) : 'raven';
       const maxPlayers = Math.min(16, Math.max(5, Number(payload.maxPlayers) || 10));
+      const gameMode = payload.gameMode === 'in_person' ? 'in_person' : 'online';
       if (name.length < 2) return reply(ack, error('Choose a nickname with at least two characters.'));
       let code = makeCode();
       let attempts = 0;
@@ -795,6 +799,7 @@ io.on('connection', (socket) => {
       const token = randomBytes(32).toString('hex');
       const room = {
         code,
+        gameMode,
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
         status: 'lobby',
@@ -835,6 +840,10 @@ io.on('connection', (socket) => {
       if (!/^[A-HJ-NP-Z2-9]{4}$/.test(code)) return reply(ack, error('Enter a valid four-character table code.'));
       const room = rooms.get(code);
       if (!room) return reply(ack, error('No table was found with that code. Check the code and try again.'));
+      const requestedMode = payload.gameMode === 'in_person' || payload.gameMode === 'online' ? payload.gameMode : null;
+      const roomMode = room.gameMode === 'in_person' ? 'in_person' : 'online';
+      if (roomMode === 'in_person' && !requestedMode) return reply(ack, error('Update your game before joining this In-Person gathering.'));
+      if (requestedMode && requestedMode !== roomMode) return reply(ack, error(roomMode === 'in_person' ? 'This code belongs to an In-Person gathering. Choose Gather at the Table first.' : 'This code belongs to an Online table. Choose Summon from Afar first.'));
       if (room.status !== 'lobby') return reply(ack, error('This game has already started. New players cannot join.'));
       if (room.players.length >= room.settings.maxPlayers) return reply(ack, error('This table is full.'));
       if (name.length < 2) return reply(ack, error('Choose a nickname with at least two characters.'));
@@ -891,6 +900,7 @@ io.on('connection', (socket) => {
 
   socket.on('lobby:start', withPlayer(socket, 'lobby:start', async (room, player) => {
     if (room.status !== 'lobby') return error('This game has already started.');
+    if (room.gameMode === 'in_person') return error('In-Person gameplay is not unlocked yet. The narrator and sequential night flow are being added in the next stages.');
     if (room.hostId !== player.id) return error('Only the host can start the game.');
     if (room.players.length < 5) return error('At least five players are required to begin.');
     const mafiaCap = getMafiaCap(room.players.length);
