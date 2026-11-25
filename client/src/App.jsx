@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request, socket } from './socket.js';
 import VoiceRoom from './components/VoiceRoom.jsx';
+import { getNarrationCue } from './audio/narration.js';
+
+// HOLLOW_STAGE_6_NARRATOR_AUDIO: one unlocked narrator device plays the shared static voice pack.
 
 const AVATARS = [
   { id: 'raven', face: '🐦‍⬛', label: 'Raven' },
@@ -157,6 +160,14 @@ function App() {
   const lastPhaseKey = useRef('');
   // HOLLOW_STAGE_3_IN_PERSON_LOBBY: keep the narrator's unlocked audio context alive across lobby renders.
   const narratorAudioContextRef = useRef(null);
+  const narratorAudioElementRef = useRef(null);
+  const narratorAudioSourceRef = useRef(null);
+  const narratorAudioGainRef = useRef(null);
+  const narratorAudioCompressorRef = useRef(null);
+  const narrationUnlockedRef = useRef(false);
+  const lastNarratorIdRef = useRef('');
+  const [narrationUnlocked, setNarrationUnlocked] = useState(false);
+  const [narrationPlaybackError, setNarrationPlaybackError] = useState('');
 
   const flash = useCallback((message, isError = false) => {
     if (isError) setErrorMessage(message);
@@ -341,33 +352,131 @@ function App() {
     else flash(response.ready ? 'You are marked ready for the vote.' : 'You are no longer marked ready.');
   };
 
-  const testNarratorSpeaker = async () => {
+  const getNarratorAudioElement = () => {
+    if (narratorAudioContextRef.current?.state === 'closed') {
+      narratorAudioContextRef.current = null;
+      narratorAudioSourceRef.current = null;
+      narratorAudioGainRef.current = null;
+      narratorAudioCompressorRef.current = null;
+      narratorAudioElementRef.current = null;
+    }
+    if (!narratorAudioElementRef.current) {
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.crossOrigin = 'anonymous';
+      audio.volume = 1;
+      audio.addEventListener('error', () => {
+        setNarrationPlaybackError('Audio could not be loaded. Check that the voice pack is complete.');
+      });
+      narratorAudioElementRef.current = audio;
+    }
+    return narratorAudioElementRef.current;
+  };
+
+  const prepareNarratorAudioGraph = (audio) => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return { ok: false, error: 'This browser does not support the speaker test.' };
-    try {
-      let context = narratorAudioContextRef.current;
-      if (!context || context.state === 'closed') {
-        context = new AudioContextClass();
-        narratorAudioContextRef.current = context;
-      }
-      await context.resume();
-      const now = context.currentTime;
-      const oscillator = context.createOscillator();
+    if (!AudioContextClass) return null;
+    let context = narratorAudioContextRef.current;
+    if (!context || context.state === 'closed') {
+      context = new AudioContextClass();
+      narratorAudioContextRef.current = context;
+    }
+    if (!narratorAudioSourceRef.current) {
+      const source = context.createMediaElementSource(audio);
+      const compressor = context.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-19, context.currentTime);
+      compressor.knee.setValueAtTime(16, context.currentTime);
+      compressor.ratio.setValueAtTime(3.5, context.currentTime);
+      compressor.attack.setValueAtTime(0.004, context.currentTime);
+      compressor.release.setValueAtTime(0.24, context.currentTime);
       const gain = context.createGain();
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(523.25, now);
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.075, now + 0.025);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
-      oscillator.connect(gain);
+      gain.gain.setValueAtTime(1.08, context.currentTime);
+      source.connect(compressor);
+      compressor.connect(gain);
       gain.connect(context.destination);
-      oscillator.start(now);
-      oscillator.stop(now + 0.25);
-      return { ok: true };
-    } catch {
-      return { ok: false, error: 'The browser could not start audio. Tap the test again and check the device volume.' };
+      narratorAudioSourceRef.current = source;
+      narratorAudioCompressorRef.current = compressor;
+      narratorAudioGainRef.current = gain;
+    }
+    return context;
+  };
+
+  const playNarratorClip = async (clipId) => {
+    const audio = getNarratorAudioElement();
+    try {
+      const context = prepareNarratorAudioGraph(audio);
+      if (context?.state === 'suspended') await context.resume();
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = `/audio/${clipId}.mp3`;
+      audio.load();
+      await audio.play();
+      setNarrationPlaybackError('');
+      return { ok: true, audio };
+    } catch (error) {
+      setNarrationPlaybackError(error?.name === 'NotAllowedError'
+        ? 'Tap ENABLE THE HOUSE VOICE to allow this phone to play announcements.'
+        : 'Narrator audio could not start. Check the phone volume and audio files.');
+      return { ok: false, error: 'The browser blocked narrator audio. Tap the enable button and try again.' };
     }
   };
+
+  const testNarratorSpeaker = async () => {
+    if (!snapshot?.me?.isNarrator) return { ok: false, error: 'Only the assigned narrator device can enable public audio.' };
+    if (!snapshot.voicePackReady) return { ok: false, error: 'The complete narrator voice pack is not installed yet.' };
+    setNarrationPlaybackError('');
+    const audio = getNarratorAudioElement();
+    let timeoutId;
+    let failed = false;
+    const playbackEnded = new Promise((resolve) => {
+      const finish = (didFail = false) => {
+        failed = didFail;
+        resolve();
+      };
+      audio.addEventListener('ended', () => finish(false), { once: true });
+      audio.addEventListener('error', () => finish(true), { once: true });
+    });
+    const result = await playNarratorClip('narrator_test');
+    if (!result.ok) return result;
+    await Promise.race([playbackEnded, new Promise((resolve) => { timeoutId = window.setTimeout(resolve, 15000); })]);
+    window.clearTimeout(timeoutId);
+    if (failed || !audio.ended) {
+      audio.pause();
+      return { ok: false, error: 'The narrator test did not finish playing. Check the volume and try again.' };
+    }
+    const ready = await request('narrator:audio-ready');
+    if (!ready.ok) return { ok: false, error: ready.error || 'The server could not confirm narrator readiness.' };
+    narrationUnlockedRef.current = true;
+    setNarrationUnlocked(true);
+    return { ok: true };
+  };
+
+  useEffect(() => {
+    if (snapshot?.gameMode !== 'in_person') return;
+    if (lastNarratorIdRef.current !== snapshot.narratorId) {
+      lastNarratorIdRef.current = snapshot.narratorId || '';
+      narrationUnlockedRef.current = false;
+      setNarrationUnlocked(false);
+    }
+    if (!snapshot?.me?.isNarrator) return;
+    if (snapshot.narratorAudioReady && !narrationUnlockedRef.current) {
+      narrationUnlockedRef.current = true;
+      setNarrationUnlocked(true);
+    }
+    if (!narrationUnlockedRef.current) return;
+    const cue = getNarrationCue(snapshot);
+    if (!cue) return;
+    const storageKey = `hollow-narration:${snapshot.code}`;
+    let previousKey = '';
+    try { previousKey = sessionStorage.getItem(storageKey) || ''; } catch { /* Audio still works without session storage. */ }
+    if (previousKey === cue.key) return;
+    try { sessionStorage.setItem(storageKey, cue.key); } catch { /* In-memory dedupe below still works. */ }
+    playNarratorClip(cue.clip).then((result) => {
+      if (!result.ok) {
+        try { if (sessionStorage.getItem(storageKey) === cue.key) sessionStorage.removeItem(storageKey); } catch { /* No persistent store available. */ }
+      }
+    });
+  }, [snapshot, narrationUnlocked]);
 
   const copyCode = async () => {
     try {
@@ -397,6 +506,12 @@ function App() {
       </header>
 
       {(errorMessage || notice) && <div className={`toast ${errorMessage ? 'toast-error' : 'toast-good'}`}>{errorMessage || notice}</div>}
+      {snapshot?.status === 'finished' && snapshot.gameMode === 'in_person' && snapshot.me.isNarrator && !narrationUnlocked && (
+        <div className="narrator-unlock-banner narrator-finished-unlock" role="status">
+          <div><strong>THE FINAL VERDICT IS READY</strong><span>{narrationPlaybackError || 'Enable this phone to hear the final announcement.'}</span></div>
+          <button type="button" className="outline-button" onClick={testNarratorSpeaker}>ENABLE HOUSE VOICE</button>
+        </div>
+      )}
 
       {!snapshot && (
         <Landing
@@ -421,6 +536,7 @@ function App() {
           onKickPlayer={kickPlayer}
           onSetNarrator={setNarrator}
           onTestSpeaker={testNarratorSpeaker}
+          narrationPlaybackError={narrationPlaybackError}
         />
       )}
 
@@ -442,6 +558,9 @@ function App() {
           onKickPlayer={kickPlayer}
           onReadyToVote={readyToVote}
           onIdentityReady={readyIdentity}
+          narrationUnlocked={narrationUnlocked}
+          onEnableNarration={testNarratorSpeaker}
+          narrationPlaybackError={narrationPlaybackError}
         />
       )}
 
@@ -537,7 +656,7 @@ function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, join
   );
 }
 
-function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer, onSetNarrator, onTestSpeaker }) {
+function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer, onSetNarrator, onTestSpeaker, narrationPlaybackError }) {
   const isHost = snapshot.me.isHost;
   const actualCap = Math.max(1, Math.floor((snapshot.players.length - 1) / 2));
   const [localMax, setLocalMax] = useState(snapshot.settings.maxPlayers);
@@ -548,6 +667,7 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
   useEffect(() => { setLocalMafia(snapshot.settings.mafiaCount); }, [snapshot.settings.mafiaCount]);
   useEffect(() => { setSpeakerTestStatus(''); }, [snapshot.narratorId]);
   const canStart = snapshot.players.length >= 5 && localMafia <= actualCap && localMax >= snapshot.players.length;
+  const narratorPrerequisitesMet = snapshot.gameMode !== 'in_person' || (snapshot.voicePackReady && snapshot.narratorAudioReady);
   const runSpeakerTest = async () => {
     setSpeakerTestBusy(true);
     const result = await onTestSpeaker();
@@ -609,16 +729,16 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
                     {snapshot.players.filter((player) => player.connected).map((player) => <option key={player.id} value={player.id}>{player.name}{player.id === snapshot.me.id ? ' · HOST DEVICE' : ''}</option>)}
                   </select>
                 </label>
-                <p>Host controls stay with you. You may assign the public speaker to any connected phone before the game begins.</p>
+                <p>Host controls stay with you. Assign one connected phone, then have that person enable the voice before the game begins.</p>
               </div>
             )}
             {snapshot.me.isNarrator ? (
               <div className="narrator-test-row">
-                <button type="button" className="outline-button narrator-test-button" onClick={runSpeakerTest} disabled={speakerTestBusy}>{speakerTestBusy ? 'TESTING SPEAKER…' : '♪ TEST THIS SPEAKER'}</button>
-                <span className={speakerTestStatus.startsWith('AUDIO READY') ? 'narrator-test-status narrator-test-success' : 'narrator-test-status'} aria-live="polite">{speakerTestStatus || 'Tap to check this device’s speaker or connected Bluetooth output.'}</span>
+                <button type="button" className="outline-button narrator-test-button" onClick={runSpeakerTest} disabled={speakerTestBusy || !snapshot.voicePackReady}>{speakerTestBusy ? 'TESTING HOUSE VOICE…' : snapshot.narratorAudioReady ? '♪ REPLAY VOICE TEST' : '♪ ENABLE & TEST NARRATOR'}</button>
+                <span className={speakerTestStatus.startsWith('AUDIO READY') ? 'narrator-test-status narrator-test-success' : 'narrator-test-status'} aria-live="polite">{speakerTestStatus || narrationPlaybackError || (!snapshot.voicePackReady ? 'Generate the voice pack on your computer before starting.' : snapshot.narratorAudioReady ? 'NARRATOR READY · PUBLIC AUDIO PLAYS FROM THIS DEVICE ONLY' : 'Tap once to unlock public narration on this phone.')}</span>
               </div>
             ) : (
-              <p className="narrator-guest-note">Public announcements will play only from {snapshot.narrator?.name || 'the assigned narrator'}’s device. Your phone will stay silent.</p>
+              <p className="narrator-guest-note">Public announcements play only from {snapshot.narrator?.name || 'the assigned narrator'}’s device. {snapshot.narratorAudioReady ? 'The narrator is ready.' : 'Ask the narrator to enable audio before the game begins.'} Your phone will stay silent.</p>
             )}
           </section>
         </>
@@ -654,7 +774,7 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
               <div className="setting-block"><div className="setting-row"><label>Mafia members</label><strong>{localMafia}</strong></div><input className="range-input" type="range" min="1" max={Math.max(1, Math.floor((localMax - 1) / 2))} value={localMafia} onChange={(event) => changeMafia(event.target.value)} /></div>
               <div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>4 MIN</b> DISCUSSION FLOOR</span></div>
               {snapshot.players.length >= 5 && mafiaCount > actualCap && <p className="warning-note">With {snapshot.players.length} players, reduce Mafia to {actualCap} or fewer before starting.</p>}
-              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || snapshot.gameMode === 'in_person'}>{snapshot.gameMode === 'in_person' ? 'IN-PERSON GAMEPLAY · NEXT STAGE' : busy ? 'AWAKENING THE HOUSE…' : 'BEGIN THE GAME'} <span>↗</span></button>
+              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || !narratorPrerequisitesMet}>{busy ? 'AWAKENING THE HOUSE…' : snapshot.gameMode === 'in_person' ? (!snapshot.voicePackReady ? 'NARRATOR AUDIO PACK NOT READY' : !snapshot.narratorAudioReady ? 'ENABLE THE NARRATOR VOICE FIRST' : 'BEGIN THE GATHERING') : 'BEGIN THE GAME'} <span>↗</span></button>
               <p className="host-note">You are the host. Roles are assigned secretly by the server.</p>
             </>
           ) : (
@@ -794,7 +914,7 @@ function SheriffRevealOverlay({ result }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady }) {
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady, narrationUnlocked, onEnableNarration, narrationPlaybackError }) {
   const isInPerson = snapshot.gameMode === 'in_person';
   const isNight = snapshot.phase === 'night';
   const isMafiaWakeStep = ['mafia', 'mafia_clash'].includes(snapshot.nightStep);
@@ -921,6 +1041,13 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{isInPerson && isNight ? (snapshot.nightStep === 'role_reveal' ? 'IDENTITY WINDOW' : snapshot.nightStep === 'mafia_clash' ? 'FINAL MAFIA WINDOW' : ['mafia', 'angel', 'sheriff'].includes(snapshot.nightStep) ? 'ACTION WINDOW' : 'THE HOUSE MOVES') : snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
       </div>
       <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
+
+      {isInPerson && snapshot.me.isNarrator && !narrationUnlocked && (
+        <div className="narrator-unlock-banner" role="status">
+          <div><strong>THE HOUSE VOICE IS MUTED ON THIS DEVICE</strong><span>{narrationPlaybackError || 'Enable audio to resume public announcements from this narrator phone.'}</span></div>
+          <button type="button" className="outline-button" onClick={onEnableNarration}>ENABLE HOUSE VOICE</button>
+        </div>
+      )}
 
       {snapshot.announcement && !isTransition && (
         <div key={snapshot.announcement.id} className={`announcement announcement-${snapshot.announcement.accent || 'red'}`}>

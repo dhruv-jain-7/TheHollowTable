@@ -111,3 +111,31 @@ npm run build
 ## Important production notes
 
 This is a working first release / MVP codebase, not a security audit or a guarantee of unlimited scale. Before a large public launch, add monitoring, automated browser/e2e tests, persistent rate limiting (Redis), database transaction/locking for multi-instance deployments, and a moderation/reporting flow. The current room code is four characters by design; join attempts are rate-limited per IP, but a public production launch should also use a shared rate limiter and abuse monitoring.
+
+
+## In-Person narrator audio (ElevenLabs)
+
+In-Person mode uses one assigned narrator phone. All public narration is generated once and served as local MP3 files; gameplay does not call ElevenLabs and the API key is never sent to the browser or Render.
+
+1. Create an ElevenLabs API key with Text to Speech permission. Do not add it to `.env`, source code, or GitHub.
+2. In PowerShell, from the project root, securely enter the key for this terminal session and run the generator:
+
+   ```powershell
+   $secure = Read-Host "Paste your ElevenLabs API key" -AsSecureString
+   $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+   try {
+     $env:ELEVENLABS_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+     npm run audio:generate
+   } finally {
+     Remove-Item Env:ELEVENLABS_API_KEY -ErrorAction SilentlyContinue
+     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+   }
+   ```
+
+3. The generator writes MP3s to `client/public/audio/`, saves a pack manifest, skips valid existing files, and stops on the first API error. Re-run the same command to continue. Use `--overwrite` only when intentionally regenerating the entire voice pack.
+4. Run `npm run build` and `npm test`. Commit the generated MP3 files and `client/public/audio/pack-manifest.json` so Render receives the same static audio pack. Never commit the API key.
+5. In the In-Person lobby, the assigned narrator taps **ENABLE & TEST NARRATOR** once. The host can start only after the full pack is present and the narrator device is ready. Public narration plays only from that device.
+
+The current pack uses the approved single voice ID and Eleven v4 audio tags. If the API account does not allow `eleven_v4`, set `$env:HOLLOW_ELEVENLABS_MODEL = 'eleven_v3'` before running the generator, then rerun the same command. If no clip has been created yet, the generator safely switches models; if a partial pack already exists, it refuses to overwrite those files unless you explicitly run `npm run audio:generate -- --overwrite`. The generated clips are ordinary local MP3 assets; no ElevenLabs key or API call is needed during a game.
+
+Before public or commercial distribution, verify that the chosen ElevenLabs plan grants the required usage rights. The Free tier is not the commercial-licence tier; current ElevenLabs pricing lists a commercial licence with Starter and above.

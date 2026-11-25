@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import express from 'express';
@@ -10,6 +11,7 @@ import { Pool } from 'pg';
 // HOLLOW_STAGE_4_5_IN_PERSON_NIGHT_FLOW: the server owns every In-Person phase transition.
 import {
   IN_PERSON_NIGHT_STEP_SECONDS,
+  IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS,
   IN_PERSON_VOTE_SECONDS,
   getInPersonDiscussionSeconds,
   getInPersonMafiaDecision,
@@ -87,9 +89,33 @@ const MAFIA_CONFLICT_WINDOW_MS = 8000;
 const MAFIA_CONFLICT_EXTENSION_MS = 15000;
 const RECONNECT_GRACE_MS = 45_000;
 const ROOM_TTL_HOURS = 24;
-const IN_PERSON_SKIP_SECONDS = 1.25;
-// Enabled by the narrator-audio stage after the bundled voice pack is installed.
-const IN_PERSON_VOICE_READY = false;
+const IN_PERSON_PHASE_MINIMUM_SECONDS = Object.freeze({ discussion: 9, voting: 9, tieVoting: 9 });
+const IN_PERSON_TRANSITION_MINIMUM_MS = Object.freeze({ murder: 12_000, quiet: 10_000, elimination: 13_200, tie: 11_000, 'no-elimination': 11_000 });
+// HOLLOW_STAGE_6_NARRATOR_AUDIO: the In-Person mode is enabled only when the complete approved voice pack is present.
+const NARRATOR_VOICE_ID = 'bvopWwMi3nfE38bLXN5w';
+const REQUIRED_NARRATION_CLIPS = [
+  'narrator_test', 'role_reveal', 'town_sleep', 'mafia_awaken', 'mafia_clash',
+  'mafia_sleep', 'angel_awaken', 'angel_sleep', 'sheriff_awaken', 'sheriff_sleep',
+  'town_wake', 'day_discussion', 'voting_begins', 'tie_announcement', 'tie_voting',
+  'murder_report', 'quiet_report', 'elimination_report', 'no_elimination',
+  'departure_report', 'mafia_victory', 'town_victory',
+];
+
+function isInPersonVoicePackReady() {
+  const audioDir = path.resolve(__dirname, '../client/public/audio');
+  try {
+    const pack = JSON.parse(readFileSync(path.join(audioDir, 'pack-manifest.json'), 'utf8'));
+    if (pack.voiceId !== NARRATOR_VOICE_ID || pack.complete !== true) return false;
+    return REQUIRED_NARRATION_CLIPS.every((clipId) => {
+      const clip = pack.clips?.[clipId];
+      if (!clip || clip.file !== `${clipId}.mp3`) return false;
+      const filePath = path.join(audioDir, clip.file);
+      return existsSync(filePath) && statSync(filePath).size > 2048;
+    });
+  } catch {
+    return false;
+  }
+}
 
 function hashToken(token) {
   return createHash('sha256').update(String(token)).digest('hex');
@@ -184,7 +210,10 @@ function enterInPersonNightStep(room, step, durationSeconds = IN_PERSON_NIGHT_ST
   if (!cue) throw new Error(`Unknown In-Person night step: ${step}`);
   room.nightStep = step;
   room.nightStepId = randomUUID();
-  room.phaseEndsAt = Date.now() + Math.max(0, durationSeconds) * 1000;
+  const now = Date.now();
+  const narrationHoldSeconds = IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS[step] ?? 0;
+  room.nightStepMinUntil = now + narrationHoldSeconds * 1000;
+  room.phaseEndsAt = now + (Math.max(0, durationSeconds) + narrationHoldSeconds) * 1000;
   room.nightCue = makeAnnouncement('night-step', cue[0], cue[1], cue[2], { step, cueId: room.nightStepId });
   room.announcement = null;
   return true;
@@ -217,6 +246,7 @@ function beginMafiaSleep(room, targetId = null) {
 
 function progressInPersonMafia(room, { timedOut = false } = {}) {
   if (room.status !== 'playing' || room.phase !== 'night' || !['mafia', 'mafia_clash'].includes(room.nightStep)) return false;
+  if (!timedOut && room.nightStepMinUntil && Date.now() < room.nightStepMinUntil) return false;
   const decision = inPersonMafiaDecision(room);
   const outcome = getInPersonMafiaStepOutcome(room.nightStep, decision, { timedOut });
   if (!outcome) return false;
@@ -233,7 +263,7 @@ function reconcileInPersonNightProgress(room) {
   if (room.gameMode !== 'in_person' || room.status !== 'playing' || room.phase !== 'night') return false;
   if (room.nightStep === 'role_reveal') {
     const connectedLivingIds = livingPlayers(room).filter((entry) => entry.connected).map((entry) => entry.id);
-    if (allConnectedPlayersReady(connectedLivingIds, room.identityReady)) {
+    if (allConnectedPlayersReady(connectedLivingIds, room.identityReady) && (!room.nightStepMinUntil || Date.now() >= room.nightStepMinUntil)) {
       enterInPersonNightStep(room, 'town_sleep');
       return true;
     }
@@ -242,13 +272,21 @@ function reconcileInPersonNightProgress(room) {
   if (room.nightStep === 'mafia' || room.nightStep === 'mafia_clash') {
     return progressInPersonMafia(room);
   }
-  if (room.nightStep === 'angel' && !room.players.some((entry) => entry.alive && entry.connected && entry.role === 'angel')) {
-    enterInPersonNightStep(room, 'angel_sleep', IN_PERSON_SKIP_SECONDS);
-    return true;
+  if (room.nightStep === 'angel') {
+    const hasConnectedAngel = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'angel');
+    const readyToSleep = Boolean(room.actions.angelTarget) && (!room.nightStepMinUntil || Date.now() >= room.nightStepMinUntil);
+    if (!hasConnectedAngel || readyToSleep) {
+      enterInPersonNightStep(room, 'angel_sleep');
+      return true;
+    }
   }
-  if (room.nightStep === 'sheriff' && !room.players.some((entry) => entry.alive && entry.connected && entry.role === 'sheriff')) {
-    enterInPersonNightStep(room, 'sheriff_sleep', IN_PERSON_SKIP_SECONDS);
-    return true;
+  if (room.nightStep === 'sheriff') {
+    const hasConnectedSheriff = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'sheriff');
+    const readyToSleep = Boolean(room.actions.sheriffTarget) && (!room.nightStepMinUntil || Date.now() >= room.nightStepMinUntil);
+    if (!hasConnectedSheriff || readyToSleep) {
+      enterInPersonNightStep(room, 'sheriff_sleep');
+      return true;
+    }
   }
   return false;
 }
@@ -271,7 +309,7 @@ function advanceInPersonNightStep(room, { timedOut = false } = {}) {
     case 'mafia_sleep': {
       const hasAngel = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'angel');
       const nextStep = getInPersonNextNightStep(room.nightStep, { hasConnectedAngel: hasAngel });
-      if (nextStep === 'angel_sleep') enterInPersonNightStep(room, nextStep, IN_PERSON_SKIP_SECONDS);
+      if (nextStep === 'angel_sleep') enterInPersonNightStep(room, nextStep);
       else enterInPersonNightStep(room, nextStep);
       return true;
     }
@@ -281,7 +319,7 @@ function advanceInPersonNightStep(room, { timedOut = false } = {}) {
     case 'angel_sleep': {
       const hasSheriff = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'sheriff');
       const nextStep = getInPersonNextNightStep(room.nightStep, { hasConnectedSheriff: hasSheriff });
-      if (nextStep === 'sheriff_sleep') enterInPersonNightStep(room, nextStep, IN_PERSON_SKIP_SECONDS);
+      if (nextStep === 'sheriff_sleep') enterInPersonNightStep(room, nextStep);
       else enterInPersonNightStep(room, nextStep);
       return true;
     }
@@ -366,6 +404,8 @@ function makeSnapshot(room, playerId) {
     gameMode: room.gameMode === 'in_person' ? 'in_person' : 'online',
     narratorId: narrator?.id ?? null,
     narrator: narrator ? { id: narrator.id, name: narrator.name, avatar: narrator.avatar, connected: narrator.connected } : null,
+    voicePackReady: room.gameMode === 'in_person' ? isInPersonVoicePackReady() : false,
+    narratorAudioReady: room.gameMode === 'in_person' && Boolean(narrator && room.narratorReadyId === narrator.id),
     serverNow: Date.now(),
     status: room.status,
     hostId: room.hostId,
@@ -501,6 +541,7 @@ async function initializeDatabase() {
     room.narratorId = room.gameMode === 'in_person'
       ? (playerById(room, room.narratorId) ? room.narratorId : room.hostId)
       : null;
+    room.narratorReadyId = null;
     room.nightStep ??= null;
     room.nightCue ??= null;
     room.identityReady ??= {};
@@ -532,6 +573,7 @@ function attachSocket(room, player, socket) {
   socket.join(`table:${room.code}`);
   socketByPlayer.set(player.id, socket.id);
   if (room.gameMode === 'in_person' && (!room.narratorId || !playerById(room, room.narratorId))) repairNarrator(room);
+  if (room.gameMode === 'in_person' && room.narratorId === player.id) room.narratorReadyId = null;
 
   if (previousSocketId && previousSocketId !== socket.id) {
     const previousSocket = io.sockets.sockets.get(previousSocketId);
@@ -568,10 +610,11 @@ function addPrivateResult(player, text, kind = 'info', details = {}) {
 
 function setDiscussion(room) {
   room.phase = 'discussion';
+  room.phaseMinUntil = room.gameMode === 'in_person' ? Date.now() + IN_PERSON_PHASE_MINIMUM_SECONDS.discussion * 1000 : null;
   const durationSeconds = room.gameMode === 'in_person'
     ? getInPersonDiscussionSeconds(livingPlayers(room).length)
     : getDiscussionSeconds(room.round);
-  room.phaseEndsAt = Date.now() + durationSeconds * 1000;
+  room.phaseEndsAt = Date.now() + (durationSeconds + (room.gameMode === 'in_person' ? IN_PERSON_PHASE_MINIMUM_SECONDS.discussion : 0)) * 1000;
   room.tieCandidates = [];
   room.actions.dayVotes = {};
   room.actions.dayReady = {};
@@ -580,6 +623,7 @@ function setDiscussion(room) {
   room.announcement = null;
   room.nightStep = null;
   room.nightCue = null;
+  room.nightStepMinUntil = null;
 }
 
 function votingPlayers(room) {
@@ -600,15 +644,15 @@ function everyoneReady(room) {
 
 function reconcileInPersonDayProgress(room) {
   if (room.gameMode !== 'in_person' || room.status !== 'playing') return false;
-  if (room.phase === 'discussion' && everyoneReady(room)) {
+  if (room.phase === 'discussion' && everyoneReady(room) && (!room.phaseMinUntil || Date.now() >= room.phaseMinUntil)) {
     beginVoting(room);
     return true;
   }
-  if (room.phase === 'voting' && everyoneVoted(room)) {
+  if (room.phase === 'voting' && everyoneVoted(room) && (!room.phaseMinUntil || Date.now() >= room.phaseMinUntil)) {
     resolveDayVoting(room, false);
     return true;
   }
-  if (room.phase === 'tieVoting' && everyoneVoted(room)) {
+  if (room.phase === 'tieVoting' && everyoneVoted(room) && (!room.phaseMinUntil || Date.now() >= room.phaseMinUntil)) {
     resolveDayVoting(room, true);
     return true;
   }
@@ -617,20 +661,23 @@ function reconcileInPersonDayProgress(room) {
 
 function beginVoting(room) {
   room.phase = 'voting';
+  room.phaseMinUntil = room.gameMode === 'in_person' ? Date.now() + IN_PERSON_PHASE_MINIMUM_SECONDS.voting * 1000 : null;
   const durationSeconds = room.gameMode === 'in_person' ? IN_PERSON_VOTE_SECONDS : VOTE_SECONDS;
-  room.phaseEndsAt = Date.now() + durationSeconds * 1000;
+  room.phaseEndsAt = Date.now() + (durationSeconds + (room.gameMode === 'in_person' ? IN_PERSON_PHASE_MINIMUM_SECONDS.voting : 0)) * 1000;
   room.actions.dayVotes = {};
   room.actions.dayReady = {};
   room.transition = null;
   room.voteReveal = null;
   room.nightStep = null;
   room.nightCue = null;
+  room.nightStepMinUntil = null;
   room.announcement = makeAnnouncement('phase', 'THE VOTE BEGINS', 'Choose the name you believe is hiding in the dark. The vote is private.', 'gold');
 }
 
 function beginNextNight(room) {
   room.round += 1;
   room.phase = 'night';
+  room.phaseMinUntil = null;
   room.actions = freshActions();
   room.tieCandidates = [];
   room.transition = null;
@@ -651,6 +698,7 @@ function beginNextNight(room) {
 function finishGame(room, winner) {
   room.status = 'finished';
   room.phase = 'finished';
+  room.phaseMinUntil = null;
   room.phaseEndsAt = null;
   room.nightStep = null;
   room.nightCue = null;
@@ -690,15 +738,19 @@ function reconcileAfterRosterChange(room) {
 
 function startTransition(room, kind, durationMs, nextPhase, pendingWinner = null) {
   const startedAt = Date.now();
+  const effectiveDurationMs = room.gameMode === 'in_person'
+    ? Math.max(durationMs, IN_PERSON_TRANSITION_MINIMUM_MS[kind] ?? durationMs)
+    : durationMs;
   room.phase = 'transition';
-  room.phaseEndsAt = startedAt + durationMs;
+  room.phaseMinUntil = null;
+  room.phaseEndsAt = startedAt + effectiveDurationMs;
   room.nightStep = null;
   room.nightCue = null;
   room.transition = {
     id: randomUUID(),
     kind,
     startedAt,
-    durationMs,
+    durationMs: effectiveDurationMs,
     nextPhase,
     pendingWinner,
     victimName: room.announcement?.victimName ?? null,
@@ -722,7 +774,8 @@ function completeTransition(room) {
   }
   if (transition.nextPhase === 'tieVoting') {
     room.phase = 'tieVoting';
-    room.phaseEndsAt = Date.now() + (room.gameMode === 'in_person' ? IN_PERSON_VOTE_SECONDS : TIE_SECONDS) * 1000;
+    room.phaseMinUntil = room.gameMode === 'in_person' ? Date.now() + IN_PERSON_PHASE_MINIMUM_SECONDS.tieVoting * 1000 : null;
+    room.phaseEndsAt = Date.now() + ((room.gameMode === 'in_person' ? IN_PERSON_VOTE_SECONDS : TIE_SECONDS) + (room.gameMode === 'in_person' ? IN_PERSON_PHASE_MINIMUM_SECONDS.tieVoting : 0)) * 1000;
     room.transition = null;
     room.voteReveal = null;
     room.actions.dayVotes = {};
@@ -976,9 +1029,20 @@ async function tickRooms() {
       changed = true;
     }
 
-    if (room.status === 'playing' && room.gameMode === 'in_person' && room.phase === 'night' && room.phaseEndsAt && now >= room.phaseEndsAt) {
-      advanceInPersonNightStep(room, { timedOut: true });
-      changed = true;
+    if (room.status === 'playing' && room.gameMode === 'in_person' && room.phase === 'night') {
+      if (room.nightStepMinUntil && now >= room.nightStepMinUntil && reconcileInPersonNightProgress(room)) changed = true;
+      if (room.phase === 'night' && room.phaseEndsAt && now >= room.phaseEndsAt) {
+        advanceInPersonNightStep(room, { timedOut: true });
+        changed = true;
+      }
+    } else if (room.status === 'playing' && room.gameMode === 'in_person' && ['discussion', 'voting', 'tieVoting'].includes(room.phase)) {
+      if (room.phaseMinUntil && now >= room.phaseMinUntil && reconcileInPersonDayProgress(room)) changed = true;
+      if (!changed && room.phaseEndsAt && now >= room.phaseEndsAt) {
+        if (room.phase === 'discussion') beginVoting(room);
+        else if (room.phase === 'voting') resolveDayVoting(room, false);
+        else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
+        changed = true;
+      }
     } else if (room.status === 'playing' && room.phase === 'night' && room.gameMode !== 'in_person' && extendForMafiaConflict(room, now)) {
       changed = true;
     } else if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
@@ -1065,6 +1129,7 @@ io.on('connection', (socket) => {
         status: 'lobby',
         hostId: id,
         narratorId: gameMode === 'in_person' ? id : null,
+        narratorReadyId: null,
         hostGraceUntil: null,
         settings: { maxPlayers, mafiaCount: Math.min(2, getMafiaCap(maxPlayers)) },
         players: [{ id, name, avatar, tokenHash: hashToken(token), role: null, alive: true, connected: true, joinedAt: Date.now(), privateResults: [] }],
@@ -1167,15 +1232,25 @@ io.on('connection', (socket) => {
     if (!target) return error('That player is no longer at the table.');
     if (!target.connected) return error('The narrator device must be connected to the table.');
     room.narratorId = target.id;
+    room.narratorReadyId = null;
     await commit(room);
     return success({ narratorId: target.id });
+  }));
+
+  socket.on('narrator:audio-ready', withPlayer(socket, 'narrator:audio-ready', async (room, player) => {
+    if (room.gameMode !== 'in_person') return error('Narrator audio is only used for In-Person gatherings.');
+    if (room.narratorId !== player.id) return error('Only the assigned narrator device can enable public audio.');
+    if (!isInPersonVoicePackReady()) return error('The complete narrator voice pack is not installed yet.');
+    room.narratorReadyId = player.id;
+    await commit(room);
+    return success({ ready: true });
   }));
 
   socket.on('lobby:start', withPlayer(socket, 'lobby:start', async (room, player) => {
     if (room.status !== 'lobby') return error('This game has already started.');
     if (room.hostId !== player.id) return error('Only the host can start the game.');
-    if (room.gameMode === 'in_person' && !IN_PERSON_VOICE_READY) {
-      return error('The In-Person night sequence is prepared, but the narrator voice system must be installed before the first gathering can begin.');
+    if (room.gameMode === 'in_person' && !isInPersonVoicePackReady()) {
+      return error('The narrator audio pack is incomplete. Run the local narration generator before starting an In-Person game.');
     }
     if (room.players.length < 5) return error('At least five players are required to begin.');
     const mafiaCap = getMafiaCap(room.players.length);
@@ -1184,6 +1259,7 @@ io.on('connection', (socket) => {
       repairNarrator(room);
       const narrator = playerById(room, room.narratorId);
       if (!narrator?.connected) return error('Connect or assign a narrator phone before beginning the gathering.');
+      if (room.narratorReadyId !== narrator.id) return error('The assigned narrator must tap ENABLE & TEST NARRATOR before the host can begin.');
     }
     const shuffled = [...room.players];
     for (let i = shuffled.length - 1; i > 0; i -= 1) {
@@ -1203,6 +1279,7 @@ io.on('connection', (socket) => {
     room.round = 1;
     room.angelLastProtectedTargetId = null;
     room.phase = 'night';
+    room.phaseMinUntil = null;
     room.actions = freshActions();
     room.tieCandidates = [];
     room.transition = null;
@@ -1211,6 +1288,7 @@ io.on('connection', (socket) => {
     room.inPersonMafiaTargetId = null;
     room.nightStep = null;
     room.nightCue = null;
+    room.nightStepMinUntil = null;
     room.identityReady = {};
     room.announcement = makeAnnouncement('phase', 'NIGHT 1 · THE HOUSE GOES SILENT', 'Your role has been chosen. The doors are locked. The Mafia may now choose their victim.', 'red');
     room.players.forEach((entry) => { entry.privateResults = []; });
@@ -1257,7 +1335,7 @@ io.on('connection', (socket) => {
           return error('You cannot protect the same player in consecutive rounds. Choose someone else this night.');
         }
         room.actions.angelTarget = target.id;
-        enterInPersonNightStep(room, 'angel_sleep');
+        reconcileInPersonNightProgress(room);
       } else if (player.role === 'sheriff') {
         if (room.nightStep !== 'sheriff') return error('The Sheriff is not being summoned right now.');
         if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
@@ -1270,7 +1348,7 @@ io.on('connection', (socket) => {
           isMafia ? 'danger' : 'success',
           { targetName: target.name, targetAvatar: target.avatar },
         );
-        enterInPersonNightStep(room, 'sheriff_sleep');
+        reconcileInPersonNightProgress(room);
       } else {
         return error('Your role has no night action.');
       }
@@ -1365,6 +1443,7 @@ io.on('connection', (socket) => {
     }
 
     if (room.gameMode === 'in_person' && room.narratorId === target.id) {
+      room.narratorReadyId = null;
       room.narratorId = null;
       repairNarrator(room, true);
     }
@@ -1412,7 +1491,7 @@ io.on('connection', (socket) => {
         return success({ left: true, deleted: true });
       }
       if (room.hostId === player.id) room.hostId = room.players.find((entry) => entry.connected)?.id ?? room.players[0].id;
-      if (room.gameMode === 'in_person') repairNarrator(room, true);
+      if (room.gameMode === 'in_person' && room.narratorId === player.id) { room.narratorReadyId = null; room.narratorId = null; repairNarrator(room, true); }
       await commit(room);
       return success({ left: true });
     }
@@ -1430,7 +1509,7 @@ io.on('connection', (socket) => {
         room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id ?? room.hostId;
         room.hostGraceUntil = null;
       }
-      if (room.gameMode === 'in_person') repairNarrator(room, true);
+      if (room.gameMode === 'in_person' && room.narratorId === player.id) { room.narratorReadyId = null; room.narratorId = null; repairNarrator(room, true); }
       if (reconcileAfterRosterChange(room)) {
         // The departure itself may decide the game.
       } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
@@ -1458,7 +1537,7 @@ io.on('connection', (socket) => {
     player.connected = false;
     player.disconnectAt = Date.now();
     if (room.hostId === player.id) room.hostGraceUntil = Date.now() + RECONNECT_GRACE_MS;
-    if (room.gameMode === 'in_person' && room.narratorId === player.id) repairNarrator(room, true);
+    if (room.gameMode === 'in_person' && room.narratorId === player.id) { room.narratorReadyId = null; repairNarrator(room, true); }
     if (room.gameMode === 'in_person') {
       reconcileInPersonNightProgress(room);
       reconcileInPersonDayProgress(room);

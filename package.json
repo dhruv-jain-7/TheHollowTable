@@ -10,7 +10,8 @@
     "dev:client": "vite --config client/vite.config.js",
     "build": "vite build --config client/vite.config.js",
     "start": "cross-env NODE_ENV=production node server/index.js",
-    "test": "node --test server/*.test.js"
+    "test": "node --test server/*.test.js",
+    "audio:generate": "node scripts/generate-narration.mjs"
   },
   "dependencies": {
     "@livekit/components-react": "^2.9.25",

@@ -1,0 +1,97 @@
+{
+  "name": "The Hollow Table \u2014 In-Person Narration Pack",
+  "version": 1,
+  "voiceId": "bvopWwMi3nfE38bLXN5w",
+  "modelId": "eleven_v4",
+  "outputFormat": "mp3_44100_128",
+  "clips": [
+    {
+      "id": "narrator_test",
+      "text": "[clear, warm, measured, confident] The voice of the house is ready. Keep this phone nearby, and set the volume so every word can be heard."
+    },
+    {
+      "id": "role_reveal",
+      "text": "[low, calm, mysterious, deliberate] Your identity has been chosen. Read your card in silence. Keep it secret. Confirm when you are ready."
+    },
+    {
+      "id": "town_sleep",
+      "text": "[deep, quiet, authoritative] Everyone, close your eyes. The house is watching."
+    },
+    {
+      "id": "mafia_awaken",
+      "text": "[cold, commanding, ominous, clear projection] Mafia, awaken. Choose one living soul. You must agree on the same target before the night can continue."
+    },
+    {
+      "id": "mafia_clash",
+      "text": "[tense, controlled, urgent] The Mafia are divided. This is your final chance to agree. If you remain divided, no one will be taken tonight."
+    },
+    {
+      "id": "mafia_sleep",
+      "text": "[low, firm, final] Mafia, close your eyes. Your choice is sealed."
+    },
+    {
+      "id": "angel_awaken",
+      "text": "[soft, warm, gentle, reassuring] Angel, awaken. One life may be in danger. Choose one soul to protect. Your choice is final tonight."
+    },
+    {
+      "id": "angel_sleep",
+      "text": "[soft, calm, mysterious] Angel, close your eyes. Let the house fall quiet."
+    },
+    {
+      "id": "sheriff_awaken",
+      "text": "[serious, investigative, measured] Sheriff, awaken. Choose one person to investigate. Your answer will appear privately on your phone."
+    },
+    {
+      "id": "sheriff_sleep",
+      "text": "[deep, quiet, conclusive] Sheriff, close your eyes. The last secret is sealed."
+    },
+    {
+      "id": "town_wake",
+      "text": "[rising, resonant, dramatic] Town, open your eyes. Dawn has reached the house."
+    },
+    {
+      "id": "day_discussion",
+      "text": "[measured, authoritative, suspenseful] The day is yours. Speak carefully, listen closely, and decide whom you trust. The clock is running."
+    },
+    {
+      "id": "voting_begins",
+      "text": "[firm, ceremonial, commanding] It is time to vote. Choose the person you believe is hiding the truth. Your vote is private."
+    },
+    {
+      "id": "tie_announcement",
+      "text": "[grave, tense, deliberate] The table has not agreed. The accused will face one final vote. Choose carefully."
+    },
+    {
+      "id": "tie_voting",
+      "text": "[stern, authoritative] The final vote begins now. Only the names shown on your screen may be chosen."
+    },
+    {
+      "id": "murder_report",
+      "text": "[low, grave, slow, cinematic] Morning has come. One soul did not return from the night. Look to the screen. The house will reveal who is missing."
+    },
+    {
+      "id": "quiet_report",
+      "text": "[mysterious, restrained, resonant] Morning has come, yet no one is missing. Something moved through the darkness and left no trace."
+    },
+    {
+      "id": "elimination_report",
+      "text": "[solemn, authoritative, deliberate] The table has delivered its judgement. One seat is now empty. Remember the choice you have made."
+    },
+    {
+      "id": "no_elimination",
+      "text": "[grave, measured, final] The votes remain divided. The house accepts no verdict. No one leaves the table."
+    },
+    {
+      "id": "departure_report",
+      "text": "[somber, quiet, deliberate] A seat has fallen silent. The house counts the absence, and the game continues."
+    },
+    {
+      "id": "mafia_victory",
+      "text": "[powerful, chilling, cinematic] The last candle dies. The Mafia have claimed the house. The table belongs to the darkness."
+    },
+    {
+      "id": "town_victory",
+      "text": "[warm, triumphant, resonant] The final shadow has fallen. The town has uncovered every hidden hand. Tonight, the house is silent."
+    }
+  ]
+}

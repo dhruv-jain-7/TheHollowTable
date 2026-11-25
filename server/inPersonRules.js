@@ -4,15 +4,24 @@
  */
 export const IN_PERSON_NIGHT_STEP_SECONDS = Object.freeze({
   role_reveal: 45,
-  town_sleep: 3,
+  town_sleep: 5,
   mafia: 60,
   mafia_clash: 15,
-  mafia_sleep: 1.5,
+  mafia_sleep: 5,
   angel: 30,
-  angel_sleep: 1.5,
+  angel_sleep: 5,
   sheriff: 30,
-  sheriff_sleep: 1.5,
-  town_wake: 3,
+  sheriff_sleep: 5,
+  town_wake: 5,
+});
+
+export const IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS = Object.freeze({
+  // Keep the server from advancing past a public spoken cue before it has time to finish.
+  role_reveal: 12,
+  mafia: 11,
+  mafia_clash: 11,
+  angel: 11,
+  sheriff: 10,
 });
 
 export const IN_PERSON_VOTE_SECONDS = 30;

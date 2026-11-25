@@ -3,3 +3,9 @@ client/dist/
 .env
 .DS_Store
 *.log
+
+# Local environment overrides and API credentials
+.env.*
+!.env.example
+.hollow-backups/
+HollowTable_Stage6_Installer/

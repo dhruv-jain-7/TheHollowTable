@@ -1043,3 +1043,28 @@ h1, h2, h3, p { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   .in-person-night-banner, .in-person-night-banner::after { animation: none !important; }
 }
+
+
+/* Stage 6 — narrator audio unlock and playback guidance */
+.narrator-unlock-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 auto 20px;
+  padding: 14px 16px;
+  width: min(100%, 1180px);
+  border: 1px solid rgba(190, 145, 91, .44);
+  border-radius: 12px;
+  background: linear-gradient(120deg, rgba(68, 23, 25, .94), rgba(22, 17, 19, .96));
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .24), inset 0 0 24px rgba(139, 50, 43, .12);
+}
+.narrator-unlock-banner > div { display: grid; gap: 4px; min-width: 0; }
+.narrator-unlock-banner strong { color: #f0d7b2; letter-spacing: .11em; font-size: .72rem; }
+.narrator-unlock-banner span { color: rgba(242, 226, 207, .72); font-size: .84rem; line-height: 1.45; }
+.narrator-unlock-banner button { flex: 0 0 auto; white-space: nowrap; }
+.narrator-finished-unlock { position: relative; z-index: 50; margin-top: 12px; }
+@media (max-width: 640px) {
+  .narrator-unlock-banner { align-items: stretch; flex-direction: column; }
+  .narrator-unlock-banner button { width: 100%; }
+}

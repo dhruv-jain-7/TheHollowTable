@@ -1,0 +1,144 @@
+{
+  "name": "The Hollow Table — In-Person Narration Pack",
+  "version": 1,
+  "voiceId": "bvopWwMi3nfE38bLXN5w",
+  "modelId": "eleven_v4",
+  "outputFormat": "mp3_44100_128",
+  "createdAt": "2026-11-25T16:23:27.371Z",
+  "clips": {
+    "narrator_test": {
+      "file": "narrator_test.mp3",
+      "characters": 138,
+      "bytes": 106204,
+      "sha256": "affef60df2131b0c91030fa770889b55d3cd183ed1417cd373878deaf90b6a5c"
+    },
+    "role_reveal": {
+      "file": "role_reveal.mp3",
+      "characters": 137,
+      "bytes": 122505,
+      "sha256": "fdb87115cfba81a52201596e08f72277369a5b61a300b0c6af771e2a2cd1f8c8"
+    },
+    "town_sleep": {
+      "file": "town_sleep.mp3",
+      "characters": 78,
+      "bytes": 61065,
+      "sha256": "e883d71c2b39f9311a128451f34b175a9fe4dd2c8da09b13608e6f1f02edff46"
+    },
+    "mafia_awaken": {
+      "file": "mafia_awaken.mp3",
+      "characters": 149,
+      "bytes": 126684,
+      "sha256": "c74baf12c3c53c5a86238f8d526ab8dac3486def076f9570ba2fb97025054d39"
+    },
+    "mafia_clash": {
+      "file": "mafia_clash.mp3",
+      "characters": 139,
+      "bytes": 111220,
+      "sha256": "d3840e0363c860cfe8413997004e544ba47e28663c0425b37034aac7f6a4b7ab"
+    },
+    "mafia_sleep": {
+      "file": "mafia_sleep.mp3",
+      "characters": 65,
+      "bytes": 61065,
+      "sha256": "9b37e8a84392b1aef2eae769daa18aec172e04f1ea4b92e4e627d6d1add274eb"
+    },
+    "angel_awaken": {
+      "file": "angel_awaken.mp3",
+      "characters": 132,
+      "bytes": 131700,
+      "sha256": "d099e5411eba3e76ee1f446169162378f853126b658101effc41c0ff38df90cc"
+    },
+    "angel_sleep": {
+      "file": "angel_sleep.mp3",
+      "characters": 74,
+      "bytes": 70260,
+      "sha256": "0c9b5533ca9175baa90f7885c05650f3749e728f0070e1c13dc172d59e51f113"
+    },
+    "sheriff_awaken": {
+      "file": "sheriff_awaken.mp3",
+      "characters": 134,
+      "bytes": 107458,
+      "sha256": "d29103d45cfff8b36eb17a8a192361cbb84bb91034d1a1c6e9e5cc20fcffb246"
+    },
+    "sheriff_sleep": {
+      "file": "sheriff_sleep.mp3",
+      "characters": 78,
+      "bytes": 69006,
+      "sha256": "b7b64040df0486898b4847cde6c097db52458b6700909924319b7ba58a178583"
+    },
+    "town_wake": {
+      "file": "town_wake.mp3",
+      "characters": 78,
+      "bytes": 77783,
+      "sha256": "0e691ae4eb87e4b543f9c8fc73d35fc9d888bbb054895782405e404716cd66b4"
+    },
+    "day_discussion": {
+      "file": "day_discussion.mp3",
+      "characters": 138,
+      "bytes": 121251,
+      "sha256": "fc097cf337b1789dcabc8129d8c8f0c53296a5d5b9abd793638204461354abc6"
+    },
+    "voting_begins": {
+      "file": "voting_begins.mp3",
+      "characters": 123,
+      "bytes": 100771,
+      "sha256": "f54fa9f11bb75b9c601703f094518b9c56ea2c5ce6cc269a3ac5f6ee5e857d73"
+    },
+    "tie_announcement": {
+      "file": "tie_announcement.mp3",
+      "characters": 108,
+      "bytes": 102025,
+      "sha256": "5280b14ebac567573291bbeaf79898a363d0383453512b55dadbf6d1f0793c08"
+    },
+    "tie_voting": {
+      "file": "tie_voting.mp3",
+      "characters": 100,
+      "bytes": 82798,
+      "sha256": "90fd332909ddf799432ca4c92ae69b81d78656b9fb3bea8acd459633acbb78d8"
+    },
+    "murder_report": {
+      "file": "murder_report.mp3",
+      "characters": 145,
+      "bytes": 147164,
+      "sha256": "c7dd883995c01b9b6ad84b226f345bc501d332d66d018c45ab391d73228f8be3"
+    },
+    "quiet_report": {
+      "file": "quiet_report.mp3",
+      "characters": 131,
+      "bytes": 118743,
+      "sha256": "abcfae0bdb0dac77605530148626d901804252ee30fd07bfe1ca504ec16b5291"
+    },
+    "elimination_report": {
+      "file": "elimination_report.mp3",
+      "characters": 132,
+      "bytes": 111220,
+      "sha256": "ee976d752a6793a799e56bb1e771a8da29da9354c31f64e0b9cc6c3072b1c558"
+    },
+    "no_elimination": {
+      "file": "no_elimination.mp3",
+      "characters": 105,
+      "bytes": 97009,
+      "sha256": "ef7933c943b1e31a31d8daf3c036d03af1ebbc8fda53b32e70dce9d693301816"
+    },
+    "departure_report": {
+      "file": "departure_report.mp3",
+      "characters": 107,
+      "bytes": 102025,
+      "sha256": "087b8e43e11fa3efd4b2b6ce2a39ad84d81347928851d18ce2568272af5a3876"
+    },
+    "mafia_victory": {
+      "file": "mafia_victory.mp3",
+      "characters": 122,
+      "bytes": 114981,
+      "sha256": "e978475636ddfa47af09288da5e21f61ecaf60eb1f6a07d4f4f945b959f48dfd"
+    },
+    "town_victory": {
+      "file": "town_victory.mp3",
+      "characters": 129,
+      "bytes": 137969,
+      "sha256": "c52138b2ee3fe5f41b40ec0e02d3f4f4ab3d516969232aec85655948d1cca0ba"
+    }
+  },
+  "complete": true,
+  "completedAt": "2026-11-25T16:23:28.283Z"
+}
