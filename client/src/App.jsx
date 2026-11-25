@@ -129,6 +129,8 @@ function App() {
   const chatEndRef = useRef(null);
   const lastResumeKey = useRef('');
   const lastPhaseKey = useRef('');
+  // HOLLOW_STAGE_3_IN_PERSON_LOBBY: keep the narrator's unlocked audio context alive across lobby renders.
+  const narratorAudioContextRef = useRef(null);
 
   const flash = useCallback((message, isError = false) => {
     if (isError) setErrorMessage(message);
@@ -239,6 +241,13 @@ function App() {
     return response;
   };
 
+  const setNarrator = async (playerId) => {
+    const response = await request('lobby:narrator:set', { playerId });
+    if (!response.ok) flash(response.error || 'Could not assign the narrator device.', true);
+    else flash('The narrator device has been assigned.');
+    return response;
+  };
+
   const startGame = async () => {
     setBusy(true);
     const response = await request('lobby:start');
@@ -300,6 +309,34 @@ function App() {
     else flash(response.ready ? 'You are marked ready for the vote.' : 'You are no longer marked ready.');
   };
 
+  const testNarratorSpeaker = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return { ok: false, error: 'This browser does not support the speaker test.' };
+    try {
+      let context = narratorAudioContextRef.current;
+      if (!context || context.state === 'closed') {
+        context = new AudioContextClass();
+        narratorAudioContextRef.current = context;
+      }
+      await context.resume();
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(523.25, now);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.075, now + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + 0.25);
+      return { ok: true };
+    } catch {
+      return { ok: false, error: 'The browser could not start audio. Tap the test again and check the device volume.' };
+    }
+  };
+
   const copyCode = async () => {
     try {
       await navigator.clipboard.writeText(snapshot.code);
@@ -350,6 +387,8 @@ function App() {
           busy={busy}
           onCopy={copyCode}
           onKickPlayer={kickPlayer}
+          onSetNarrator={setNarrator}
+          onTestSpeaker={testNarratorSpeaker}
         />
       )}
 
@@ -465,20 +504,29 @@ function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, join
   );
 }
 
-function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer }) {
+function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer, onSetNarrator, onTestSpeaker }) {
   const isHost = snapshot.me.isHost;
   const actualCap = Math.max(1, Math.floor((snapshot.players.length - 1) / 2));
-  const canStart = snapshot.players.length >= 5 && mafiaCount <= actualCap;
-  const [localMax, setLocalMax] = useState(maxPlayers);
-  const [localMafia, setLocalMafia] = useState(mafiaCount);
-  useEffect(() => { setLocalMax(maxPlayers); }, [maxPlayers]);
-  useEffect(() => { setLocalMafia(mafiaCount); }, [mafiaCount]);
+  const [localMax, setLocalMax] = useState(snapshot.settings.maxPlayers);
+  const [localMafia, setLocalMafia] = useState(snapshot.settings.mafiaCount);
+  const [speakerTestBusy, setSpeakerTestBusy] = useState(false);
+  const [speakerTestStatus, setSpeakerTestStatus] = useState('');
+  useEffect(() => { setLocalMax(snapshot.settings.maxPlayers); }, [snapshot.settings.maxPlayers]);
+  useEffect(() => { setLocalMafia(snapshot.settings.mafiaCount); }, [snapshot.settings.mafiaCount]);
+  useEffect(() => { setSpeakerTestStatus(''); }, [snapshot.narratorId]);
+  const canStart = snapshot.players.length >= 5 && localMafia <= actualCap && localMax >= snapshot.players.length;
+  const runSpeakerTest = async () => {
+    setSpeakerTestBusy(true);
+    const result = await onTestSpeaker();
+    setSpeakerTestBusy(false);
+    setSpeakerTestStatus(result?.ok ? 'AUDIO READY · CHECK YOUR SPEAKER VOLUME' : result?.error || 'Speaker test failed.');
+  };
 
   const saveSettings = async (nextMax, nextMafia) => {
     const response = await onUpdate(nextMax, nextMafia);
     if (!response?.ok) {
-      setLocalMax(maxPlayers);
-      setLocalMafia(mafiaCount);
+      setLocalMax(snapshot.settings.maxPlayers);
+      setLocalMafia(snapshot.settings.mafiaCount);
     }
   };
   const changeMax = (value) => {
@@ -501,10 +549,46 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
         <p>Invite your circle. When at least five souls have arrived, the host may begin.</p>
       </div>
       {snapshot.gameMode === 'in_person' && (
-        <div className="mode-unlock-banner">
-          <strong>GATHER AT THE TABLE</strong>
-          <span>IN-PERSON PLAY IS BEING BUILT IN STAGES. THIS ROOM IS RESERVED, BUT THE GAME WILL UNLOCK WHEN THE NARRATOR AND SEQUENTIAL NIGHT FLOW ARE READY.</span>
-        </div>
+        <>
+          <div className="in-person-mode-banner">
+            <strong>GATHER AT THE TABLE</strong>
+            <span>EVERY PLAYER USES THEIR OWN PHONE. ALL PHONES MUST STAY CONNECTED TO THE INTERNET. THIS IS NOT OFFLINE PLAY.</span>
+          </div>
+          <section className="panel narrator-panel">
+            <div className="narrator-panel-heading">
+              <div><div className="panel-kicker">THE VOICE OF THE HOUSE</div><h2>Narrator device</h2></div>
+              <span className={snapshot.me.isNarrator ? 'narrator-device-badge narrator-device-active' : 'narrator-device-badge'}>{snapshot.me.isNarrator ? 'THIS DEVICE' : 'ONE SPEAKER ONLY'}</span>
+            </div>
+            <div className="narrator-assignment-row">
+              <div className="narrator-avatar">{avatarFor(snapshot.narrator?.avatar).face}</div>
+              <div className="narrator-assignment-copy">
+                <small>ASSIGNED NARRATOR</small>
+                <strong>{snapshot.narrator?.name || 'Awaiting a connected device'}</strong>
+                <span>{snapshot.narrator?.connected ? 'This is the only device that will play public announcements.' : 'The assigned device is reconnecting. The host can assign another connected device.'}</span>
+              </div>
+              <span className={snapshot.narrator?.connected ? 'narrator-connection narrator-connected' : 'narrator-connection'}>{snapshot.narrator?.connected ? 'CONNECTED' : 'OFFLINE'}</span>
+            </div>
+            {isHost && (
+              <div className="narrator-controls">
+                <label className="narrator-select-wrap" htmlFor="narrator-device-select">
+                  <span>ASSIGN THE SPEAKING DEVICE</span>
+                  <select id="narrator-device-select" className="dark-input narrator-select" value={snapshot.narratorId || snapshot.me.id} onChange={(event) => onSetNarrator(event.target.value)} disabled={busy}>
+                    {snapshot.players.filter((player) => player.connected).map((player) => <option key={player.id} value={player.id}>{player.name}{player.id === snapshot.me.id ? ' · HOST DEVICE' : ''}</option>)}
+                  </select>
+                </label>
+                <p>Host controls stay with you. You may assign the public speaker to any connected phone before the game begins.</p>
+              </div>
+            )}
+            {snapshot.me.isNarrator ? (
+              <div className="narrator-test-row">
+                <button type="button" className="outline-button narrator-test-button" onClick={runSpeakerTest} disabled={speakerTestBusy}>{speakerTestBusy ? 'TESTING SPEAKER…' : '♪ TEST THIS SPEAKER'}</button>
+                <span className={speakerTestStatus.startsWith('AUDIO READY') ? 'narrator-test-status narrator-test-success' : 'narrator-test-status'} aria-live="polite">{speakerTestStatus || 'Tap to check this device’s speaker or connected Bluetooth output.'}</span>
+              </div>
+            ) : (
+              <p className="narrator-guest-note">Public announcements will play only from {snapshot.narrator?.name || 'the assigned narrator'}’s device. Your phone will stay silent.</p>
+            )}
+          </section>
+        </>
       )}
       <div className="lobby-grid">
         <section className="panel code-panel">
@@ -537,7 +621,7 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
               <div className="setting-block"><div className="setting-row"><label>Mafia members</label><strong>{localMafia}</strong></div><input className="range-input" type="range" min="1" max={Math.max(1, Math.floor((localMax - 1) / 2))} value={localMafia} onChange={(event) => changeMafia(event.target.value)} /></div>
               <div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>4 MIN</b> DISCUSSION FLOOR</span></div>
               {snapshot.players.length >= 5 && mafiaCount > actualCap && <p className="warning-note">With {snapshot.players.length} players, reduce Mafia to {actualCap} or fewer before starting.</p>}
-              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || snapshot.gameMode === 'in_person'}>{snapshot.gameMode === 'in_person' ? 'IN-PERSON MODE · NOT READY YET' : busy ? 'AWAKENING THE HOUSE…' : 'BEGIN THE GAME'} <span>↗</span></button>
+              <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || snapshot.gameMode === 'in_person'}>{snapshot.gameMode === 'in_person' ? 'IN-PERSON GAMEPLAY · NEXT STAGE' : busy ? 'AWAKENING THE HOUSE…' : 'BEGIN THE GAME'} <span>↗</span></button>
               <p className="host-note">You are the host. Roles are assigned secretly by the server.</p>
             </>
           ) : (

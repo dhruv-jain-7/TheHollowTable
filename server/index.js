@@ -129,6 +129,20 @@ function playerById(room, playerId) {
   return room.players.find((player) => player.id === playerId) ?? null;
 }
 
+// HOLLOW_STAGE_3_IN_PERSON_LOBBY: only one connected seat is designated to speak publicly.
+function repairNarrator(room, force = false) {
+  if (room.gameMode !== 'in_person') {
+    room.narratorId = null;
+    return;
+  }
+  const assigned = playerById(room, room.narratorId);
+  if (assigned?.connected) return;
+  if (assigned && !force) return; // Preserve a saved assignment during the server-restart reconnect grace period.
+  const host = playerById(room, room.hostId);
+  const fallback = (host?.connected ? host : null) || room.players.find((player) => player.connected) || null;
+  room.narratorId = fallback?.id ?? null;
+}
+
 function livingPlayers(room) {
   return room.players.filter((player) => player.alive);
 }
@@ -170,6 +184,7 @@ function makeSnapshot(room, playerId) {
   const me = playerById(room, playerId);
   if (!me) return null;
   const revealAll = room.status === 'finished';
+  const narrator = room.gameMode === 'in_person' ? playerById(room, room.narratorId || room.hostId) : null;
   const mafiaTeam = me.role === 'mafia' && me.alive
     ? room.players.filter((p) => p.role === 'mafia').map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, alive: p.alive }))
     : [];
@@ -191,6 +206,8 @@ function makeSnapshot(room, playerId) {
   return {
     code: room.code,
     gameMode: room.gameMode === 'in_person' ? 'in_person' : 'online',
+    narratorId: narrator?.id ?? null,
+    narrator: narrator ? { id: narrator.id, name: narrator.name, avatar: narrator.avatar, connected: narrator.connected } : null,
     serverNow: Date.now(),
     status: room.status,
     hostId: room.hostId,
@@ -203,6 +220,7 @@ function makeSnapshot(room, playerId) {
       alive: player.alive,
       connected: player.connected,
       isHost: player.id === room.hostId,
+      isNarrator: room.gameMode === 'in_person' && player.id === (room.narratorId || room.hostId),
       role: revealAll ? player.role : null,
     })),
     phase: room.phase,
@@ -239,6 +257,7 @@ function makeSnapshot(room, playerId) {
       alive: me.alive,
       connected: me.connected,
       isHost: me.id === room.hostId,
+      isNarrator: room.gameMode === 'in_person' && me.id === (room.narratorId || room.hostId),
       myActionSubmitted,
       readyToVote: Boolean(dayReady[me.id]),
       mafiaTeam,
@@ -308,6 +327,9 @@ async function initializeDatabase() {
     if (!room || !room.code || !Array.isArray(room.players)) continue;
     // HOLLOW_STAGE_2_MODE_SELECTION: rooms saved before this update remain Online.
     room.gameMode = room.gameMode === 'in_person' ? 'in_person' : 'online';
+    room.narratorId = room.gameMode === 'in_person'
+      ? (playerById(room, room.narratorId) ? room.narratorId : room.hostId)
+      : null;
     for (const player of room.players) { player.connected = false; player.disconnectAt = Date.now(); }
     // Give the original host a reconnect window after a server restart/deploy.
     // Without this, the first guest to resume can accidentally take host ownership.
@@ -334,6 +356,7 @@ function attachSocket(room, player, socket) {
   socket.data.playerId = player.id;
   socket.join(`table:${room.code}`);
   socketByPlayer.set(player.id, socket.id);
+  if (room.gameMode === 'in_person' && (!room.narratorId || !playerById(room, room.narratorId))) repairNarrator(room);
 
   if (previousSocketId && previousSocketId !== socket.id) {
     const previousSocket = io.sockets.sockets.get(previousSocketId);
@@ -694,6 +717,7 @@ async function tickRooms() {
           ?? null;
         room.hostGraceUntil = null;
       }
+      if (room.gameMode === 'in_person') repairNarrator(room, true);
       changed = true;
     }
 
@@ -804,6 +828,7 @@ io.on('connection', (socket) => {
         lastActivityAt: Date.now(),
         status: 'lobby',
         hostId: id,
+        narratorId: gameMode === 'in_person' ? id : null,
         hostGraceUntil: null,
         settings: { maxPlayers, mafiaCount: Math.min(2, getMafiaCap(maxPlayers)) },
         players: [{ id, name, avatar, tokenHash: hashToken(token), role: null, alive: true, connected: true, joinedAt: Date.now(), privateResults: [] }],
@@ -896,6 +921,18 @@ io.on('connection', (socket) => {
     room.settings.mafiaCount = mafiaCount;
     await commit(room);
     return success();
+  }));
+
+  socket.on('lobby:narrator:set', withPlayer(socket, 'lobby:narrator:set', async (room, host, payload) => {
+    if (room.status !== 'lobby') return error('The narrator device is locked after the game begins.');
+    if (room.gameMode !== 'in_person') return error('A narrator device is only used for In-Person gatherings.');
+    if (room.hostId !== host.id) return error('Only the host can assign the narrator device.');
+    const target = playerById(room, String(payload.playerId || ''));
+    if (!target) return error('That player is no longer at the table.');
+    if (!target.connected) return error('The narrator device must be connected to the table.');
+    room.narratorId = target.id;
+    await commit(room);
+    return success({ narratorId: target.id });
   }));
 
   socket.on('lobby:start', withPlayer(socket, 'lobby:start', async (room, player) => {
@@ -1026,6 +1063,10 @@ io.on('connection', (socket) => {
       }
     }
 
+    if (room.gameMode === 'in_person' && room.narratorId === target.id) {
+      room.narratorId = null;
+      repairNarrator(room, true);
+    }
     if (targetSocket) {
       targetSocket.emit('session:kicked', { reason: 'The host removed your seat from this table.' });
       targetSocket.data.code = null;
@@ -1069,6 +1110,7 @@ io.on('connection', (socket) => {
         return success({ left: true, deleted: true });
       }
       if (room.hostId === player.id) room.hostId = room.players.find((entry) => entry.connected)?.id ?? room.players[0].id;
+      if (room.gameMode === 'in_person') repairNarrator(room, true);
       await commit(room);
       return success({ left: true });
     }
@@ -1082,6 +1124,7 @@ io.on('connection', (socket) => {
         room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id ?? room.hostId;
         room.hostGraceUntil = null;
       }
+      if (room.gameMode === 'in_person') repairNarrator(room, true);
       if (reconcileAfterRosterChange(room)) {
         // The departure itself may decide the game.
       } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
@@ -1109,6 +1152,7 @@ io.on('connection', (socket) => {
     player.connected = false;
     player.disconnectAt = Date.now();
     if (room.hostId === player.id) room.hostGraceUntil = Date.now() + RECONNECT_GRACE_MS;
+    if (room.gameMode === 'in_person' && room.narratorId === player.id) repairNarrator(room, true);
     await commit(room);
   });
 });
