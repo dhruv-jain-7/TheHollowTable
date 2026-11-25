@@ -4,6 +4,7 @@ import VoiceRoom from './components/VoiceRoom.jsx';
 import { getNarrationCue } from './audio/narration.js';
 
 // HOLLOW_STAGE_6_NARRATOR_AUDIO: one unlocked narrator device plays the shared static voice pack.
+// HOLLOW_STAGE_8_UNDERTAKER_ROLE: private one-use inheritance and the in-game role guide.
 
 const AVATARS = [
   { id: 'raven', face: '🐦‍⬛', label: 'Raven' },
@@ -32,7 +33,7 @@ const AVATARS = [
   { id: 'moon2', face: '🌑', label: 'New moon' },
 ];
 
-const ROLE_NAMES = { mafia: 'Mafia', sheriff: 'Sheriff', angel: 'Angel', citizen: 'Citizen' };
+const ROLE_NAMES = { mafia: 'Mafia', sheriff: 'Sheriff', angel: 'Angel', undertaker: 'Undertaker', citizen: 'Citizen' };
 
 function roleCardFor(role, mafiaIndex = 0) {
   if (role === 'mafia') {
@@ -41,6 +42,7 @@ function roleCardFor(role, mafiaIndex = 0) {
   }
   if (role === 'sheriff') return { rank: 'A', suit: '♦', suitName: 'DIAMONDS', roleName: 'SHERIFF', art: '⚖', className: 'sheriff', motto: 'KEEP THE LIGHT ALIVE' };
   if (role === 'angel') return { rank: 'A', suit: '♥', suitName: 'HEARTS', roleName: 'ANGEL', art: '✧', className: 'angel', motto: 'ONE SOUL MAY BE SPARED' };
+  if (role === 'undertaker') return { rank: 'Q', suit: '♠', suitName: 'SPADES', roleName: 'UNDERTAKER', art: '⚰', className: 'undertaker', motto: 'THE GRAVE REMEMBERS' };
   return { rank: '7', suit: '♦', suitName: 'DIAMONDS', roleName: 'CITIZEN', art: '🕯', className: 'citizen', motto: 'FIND THE HIDDEN HAND' };
 }
 
@@ -59,7 +61,7 @@ function formatTime(milliseconds) {
 function phaseTitle(snapshot) {
   if (snapshot.status === 'lobby') return 'THE GUESTS ARE GATHERING';
   if (snapshot.phase === 'night' && snapshot.gameMode === 'in_person') {
-    const labels = { role_reveal: 'SEAL YOUR IDENTITY', town_sleep: 'THE TOWN MUST SLEEP', mafia: 'THE MAFIA AWAKENS', mafia_clash: 'CLASH OF OPINIONS', mafia_sleep: 'THE MAFIA RETURNS TO DARKNESS', angel: 'THE ANGEL AWAKENS', angel_sleep: 'THE HOUSE FALLS QUIET', sheriff: 'THE SHERIFF AWAKENS', sheriff_sleep: 'THE LAST SECRET IS SEALED', town_wake: 'DAWN APPROACHES' };
+    const labels = { role_reveal: 'SEAL YOUR IDENTITY', town_sleep: 'THE TOWN MUST SLEEP', mafia: 'THE MAFIA AWAKENS', mafia_clash: 'CLASH OF OPINIONS', mafia_sleep: 'THE MAFIA RETURNS TO DARKNESS', angel: 'THE ANGEL AWAKENS', angel_sleep: 'THE HOUSE FALLS QUIET', sheriff: 'THE SHERIFF AWAKENS', sheriff_sleep: 'THE LAST SECRET IS SEALED', undertaker: 'THE GRAVE OPENS', town_wake: 'DAWN APPROACHES' };
     return `NIGHT ${snapshot.round} · ${labels[snapshot.nightStep] || 'THE MURDER HOUR'}`;
   }
   if (snapshot.phase === 'night') return `NIGHT ${snapshot.round} · THE MURDER HOUR`;
@@ -81,7 +83,8 @@ function phaseDescription(snapshot) {
       angel: 'Only the Angel may act. Confirm one living soul to protect; the choice locks immediately.',
       angel_sleep: 'The protection is sealed. Keep your eyes closed.',
       sheriff: 'Only the Sheriff may act. Investigate one living player; the result is private to this phone.',
-      sheriff_sleep: 'The investigation is sealed. Keep your eyes closed until dawn.',
+      sheriff_sleep: 'The investigation is sealed. Keep your eyes closed until the final call.',
+      undertaker: 'The same call is made every night. Only the living Undertaker with an unused power and an eligible graveyard choice can act. No public result follows this call.',
       town_wake: 'The night is complete. The house is bringing everyone back to the table.',
     };
     return descriptions[snapshot.nightStep] || 'The house is silent. Keep your eyes closed.';
@@ -155,6 +158,7 @@ function App() {
   const [selectedTarget, setSelectedTarget] = useState('');
   const [messageText, setMessageText] = useState('');
   const [leaving, setLeaving] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const chatEndRef = useRef(null);
   const lastResumeKey = useRef('');
   const lastPhaseKey = useRef('');
@@ -270,10 +274,10 @@ function App() {
     setScreen('lobby');
   };
 
-  const updateLobby = async (nextMaxPlayers, nextMafiaCount) => {
+  const updateLobby = async (nextMaxPlayers, nextMafiaCount, nextUndertakerCount = snapshot?.settings?.undertakerCount ?? 0) => {
     setMaxPlayers(nextMaxPlayers);
     setMafiaCount(nextMafiaCount);
-    const response = await request('lobby:update', { maxPlayers: nextMaxPlayers, mafiaCount: nextMafiaCount });
+    const response = await request('lobby:update', { maxPlayers: nextMaxPlayers, mafiaCount: nextMafiaCount, undertakerCount: nextUndertakerCount });
     if (!response.ok) flash(response.error, true);
     return response;
   };
@@ -337,6 +341,13 @@ function App() {
     const response = await request('night:act', { targetId: selectedTarget });
     if (!response.ok) flash(response.error, true);
     else flash('Your night action has been recorded.');
+  };
+
+  const actUndertaker = async (targetId = null, decline = false) => {
+    const response = await request('night:undertaker', { targetId, decline });
+    if (!response.ok) flash(response.error || 'The identity could not be inherited.', true);
+    else flash(decline ? 'Your power remains unspent.' : 'The identity has been inherited. Your new role begins next night.');
+    return response;
   };
 
   const vote = async () => {
@@ -501,6 +512,7 @@ function App() {
         </button>
         <div className="topbar-right">
           <span className="online-indicator"><i /> {socket.connected ? 'SERVER CONNECTED' : 'RECONNECTING'}</span>
+          <button className="know-roles-button" type="button" onClick={() => setRulesOpen(true)}>✦ KNOW THE ROLES</button>
           {snapshot && <button className="quiet-button" onClick={leaveTable} disabled={leaving}>{leaving ? 'LEAVING…' : 'LEAVE TABLE'}</button>}
         </div>
       </header>
@@ -529,6 +541,7 @@ function App() {
           snapshot={snapshot}
           maxPlayers={snapshot.settings.maxPlayers}
           mafiaCount={snapshot.settings.mafiaCount}
+          undertakerCount={snapshot.settings.undertakerCount ?? 0}
           onUpdate={updateLobby}
           onStart={startGame}
           busy={busy}
@@ -547,6 +560,7 @@ function App() {
           selectedTarget={selectedTarget}
           setSelectedTarget={setSelectedTarget}
           actNight={actNight}
+          actUndertaker={actUndertaker}
           vote={vote}
           messageText={messageText}
           setMessageText={setMessageText}
@@ -568,11 +582,53 @@ function App() {
         <EndGame snapshot={snapshot} onLeave={leaveTable} />
       )}
 
+      {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
+
       <footer className="site-footer">
         <span>NO ONE IS INNOCENT AFTER MIDNIGHT.</span>
         <span>PRIVATE TABLES · {snapshot?.code || 'INVITE ONLY'}</span>
       </footer>
     </main>
+  );
+}
+
+function RulesModal({ onClose }) {
+  useEffect(() => {
+    const closeOnEscape = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+  const roles = [
+    { role: 'mafia', rank: 'A', name: 'Mafia', side: 'THE HOUSE', text: 'Work together in secret to choose a living player to murder each night. Win when the living Mafia equal or outnumber everyone else.' },
+    { role: 'sheriff', rank: 'A', name: 'Sheriff', side: 'THE INVESTIGATOR', text: 'Investigate one living player each night. The answer is private to you. Find the Mafia and help the town eliminate them.' },
+    { role: 'angel', rank: 'A', name: 'Angel', side: 'THE PROTECTOR', text: 'Protect one living player each night. You may protect yourself, but not the same person on consecutive nights. A saved player is never publicly identified.' },
+    { role: 'undertaker', rank: 'Q', name: 'Undertaker', side: 'THE GRAVE KEEPER', text: 'Optional · maximum one. From Round 2, when a previous player has been eliminated, you may privately inherit that player’s role once. Their seat stays empty; you keep your name and seat. Your new role becomes active next night. Declining or timing out preserves the unused power. The public wake-up call is identical every night; no one is told whether you used it or whose identity you took.' },
+    { role: 'citizen', rank: '7', name: 'Citizen', side: 'THE TOWN', text: 'You have no night action. Listen carefully, discuss what you notice, and vote to eliminate the Mafia.' },
+  ];
+  return (
+    <div className="rules-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-modal-title">
+        <button type="button" className="rules-modal-close" onClick={onClose} aria-label="Close rules">×</button>
+        <div className="eyebrow"><span /> THE HOUSE RULEBOOK <span /></div>
+        <h2 id="rules-modal-title">KNOW THE <em>ROLES</em></h2>
+        <p className="rules-modal-intro">Every seat holds a secret. Learn what each role can do, how the night moves, and how the house decides its winner.</p>
+        <div className="rules-role-grid">
+          {roles.map((entry) => (
+            <article key={entry.role} className={`rules-role-card rules-role-${entry.role}`}>
+              <div className="rules-role-rank">{entry.rank}</div>
+              <div><small>{entry.side}</small><h3>{entry.name}</h3><p>{entry.text}</p></div>
+            </article>
+          ))}
+        </div>
+        <div className="rules-flow-grid">
+          <article><span>01 · NIGHT</span><h3>The secret hours</h3><p><b>Online:</b> night actions take place privately inside the shared night timer. Mafia choose a target, Angel protects, Sheriff investigates, and an eligible Undertaker may inherit a departed role.</p><p><b>In Person:</b> the narrator follows one fixed public order: Town sleeps → Mafia → Angel → Sheriff → Undertaker → Town wakes. The Angel, Sheriff and Undertaker calls are kept in the sequence even when a role is absent, fallen, or its power has already been used. The Undertaker receives one public wake-up call only; no public use or identity announcement follows.</p></article>
+          <article><span>02 · DAY</span><h3>Discuss and decide</h3><p>Everyone discusses the night. Living players vote privately. If the first vote ties, the accused face one tie-break vote. If the tie remains, nobody is eliminated.</p></article>
+          <article><span>03 · VICTORY</span><h3>One faction remains</h3><p><b>Town wins</b> when every living Mafia member is gone. <b>Mafia wins</b> when living Mafia equal or outnumber all other living players.</p></article>
+        </div>
+        <div className="rules-privacy-note"><span>☾</span><p>During the game, no death announcement identifies the fallen player’s role. Private investigations and inherited identities stay on the relevant player’s own screen. The final reveal happens only after the game ends.</p></div>
+        <button type="button" className="primary-button full-button rules-modal-continue" onClick={onClose}>I UNDERSTAND · RETURN TO THE HOUSE</button>
+      </section>
+    </div>
   );
 }
 
@@ -619,7 +675,7 @@ function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, join
         </div>
         <div className="landing-features">
           <div><b>01</b><span>PRIVATE TABLES<br /><small>Four-character invite code</small></span></div>
-          <div><b>02</b><span>SECRET ROLES<br /><small>Mafia, Sheriff, Angel, Citizen</small></span></div>
+          <div><b>02</b><span>SECRET ROLES<br /><small>Mafia, Sheriff, Angel, Undertaker, Citizen</small></span></div>
           <div><b>03</b><span>LIVE GAMEPLAY<br /><small>Discuss, investigate, vote</small></span></div>
         </div>
         <div className="quote-mark">“</div>
@@ -656,15 +712,17 @@ function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, join
   );
 }
 
-function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCopy, onKickPlayer, onSetNarrator, onTestSpeaker, narrationPlaybackError }) {
+function Lobby({ snapshot, maxPlayers, mafiaCount, undertakerCount, onUpdate, onStart, busy, onCopy, onKickPlayer, onSetNarrator, onTestSpeaker, narrationPlaybackError }) {
   const isHost = snapshot.me.isHost;
   const actualCap = Math.max(1, Math.floor((snapshot.players.length - 1) / 2));
   const [localMax, setLocalMax] = useState(snapshot.settings.maxPlayers);
   const [localMafia, setLocalMafia] = useState(snapshot.settings.mafiaCount);
+  const [localUndertaker, setLocalUndertaker] = useState(snapshot.settings.undertakerCount ?? 0);
   const [speakerTestBusy, setSpeakerTestBusy] = useState(false);
   const [speakerTestStatus, setSpeakerTestStatus] = useState('');
   useEffect(() => { setLocalMax(snapshot.settings.maxPlayers); }, [snapshot.settings.maxPlayers]);
   useEffect(() => { setLocalMafia(snapshot.settings.mafiaCount); }, [snapshot.settings.mafiaCount]);
+  useEffect(() => { setLocalUndertaker(snapshot.settings.undertakerCount ?? 0); }, [snapshot.settings.undertakerCount]);
   useEffect(() => { setSpeakerTestStatus(''); }, [snapshot.narratorId]);
   const canStart = snapshot.players.length >= 5 && localMafia <= actualCap && localMax >= snapshot.players.length;
   const narratorPrerequisitesMet = snapshot.gameMode !== 'in_person' || (snapshot.voicePackReady && snapshot.narratorAudioReady);
@@ -675,11 +733,12 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
     setSpeakerTestStatus(result?.ok ? 'AUDIO READY · CHECK YOUR SPEAKER VOLUME' : result?.error || 'Speaker test failed.');
   };
 
-  const saveSettings = async (nextMax, nextMafia) => {
-    const response = await onUpdate(nextMax, nextMafia);
+  const saveSettings = async (nextMax, nextMafia, nextUndertaker = localUndertaker) => {
+    const response = await onUpdate(nextMax, nextMafia, nextUndertaker);
     if (!response?.ok) {
       setLocalMax(snapshot.settings.maxPlayers);
       setLocalMafia(snapshot.settings.mafiaCount);
+      setLocalUndertaker(snapshot.settings.undertakerCount ?? 0);
     }
   };
   const changeMax = (value) => {
@@ -687,11 +746,11 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
     const nextMafia = Math.min(localMafia, Math.max(1, Math.floor((nextMax - 1) / 2)));
     setLocalMax(nextMax);
     setLocalMafia(nextMafia);
-    saveSettings(nextMax, nextMafia);
+    saveSettings(nextMax, nextMafia, localUndertaker);
   };
   const changeMafia = (value) => {
     setLocalMafia(Number(value));
-    saveSettings(localMax, Number(value));
+    saveSettings(localMax, Number(value), localUndertaker);
   };
 
   return (
@@ -772,13 +831,20 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, onUpdate, onStart, busy, onCo
             <>
               <div className="setting-block"><div className="setting-row"><label>Maximum guests</label><strong>{localMax}</strong></div><input className="range-input" type="range" min="5" max="16" value={localMax} onChange={(event) => changeMax(event.target.value)} /></div>
               <div className="setting-block"><div className="setting-row"><label>Mafia members</label><strong>{localMafia}</strong></div><input className="range-input" type="range" min="1" max={Math.max(1, Math.floor((localMax - 1) / 2))} value={localMafia} onChange={(event) => changeMafia(event.target.value)} /></div>
-              <div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>4 MIN</b> DISCUSSION FLOOR</span></div>
+              <div className="undertaker-setting-card">
+                <div><span className="panel-kicker">OPTIONAL SECRET ROLE · MAXIMUM ONE</span><strong>Include the Undertaker?</strong><small>Recommended for 9+ players, but available at any table size.</small></div>
+                <div className="undertaker-choice" role="group" aria-label="Undertaker count">
+                  <button type="button" className={localUndertaker === 0 ? 'selected' : ''} onClick={() => { setLocalUndertaker(0); saveSettings(localMax, localMafia, 0); }}>0 · OFF</button>
+                  <button type="button" className={localUndertaker === 1 ? 'selected' : ''} onClick={() => { setLocalUndertaker(1); saveSettings(localMax, localMafia, 1); }}>1 · ON</button>
+                </div>
+              </div>
+              <div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>{localUndertaker}</b> UNDERTAKER</span><span><b>4 MIN</b> DISCUSSION FLOOR</span></div>
               {snapshot.players.length >= 5 && mafiaCount > actualCap && <p className="warning-note">With {snapshot.players.length} players, reduce Mafia to {actualCap} or fewer before starting.</p>}
               <button className="primary-button full-button start-button" onClick={onStart} disabled={busy || !canStart || !narratorPrerequisitesMet}>{busy ? 'AWAKENING THE HOUSE…' : snapshot.gameMode === 'in_person' ? (!snapshot.voicePackReady ? 'NARRATOR AUDIO PACK NOT READY' : !snapshot.narratorAudioReady ? 'ENABLE THE NARRATOR VOICE FIRST' : 'BEGIN THE GATHERING') : 'BEGIN THE GAME'} <span>↗</span></button>
               <p className="host-note">You are the host. Roles are assigned secretly by the server.</p>
             </>
           ) : (
-            <div className="waiting-host"><div className="waiting-orbit">✧</div><h3>Waiting for the host</h3><p>The host is preparing the house rules. The game begins when at least five guests have arrived.</p><div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span></div></div>
+            <div className="waiting-host"><div className="waiting-orbit">✧</div><h3>Waiting for the host</h3><p>The host is preparing the house rules. The game begins when at least five guests have arrived.</p><div className="fixed-roles"><span><b>1</b> SHERIFF</span><span><b>1</b> ANGEL</span><span><b>{snapshot.settings.undertakerCount ?? 0}</b> UNDERTAKER</span></div></div>
           )}
         </section>
       </div>
@@ -914,7 +980,23 @@ function SheriffRevealOverlay({ result }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady, narrationUnlocked, onEnableNarration, narrationPlaybackError }) {
+function UndertakerRevealOverlay({ result }) {
+  if (!result) return null;
+  const inheritedName = ROLE_NAMES[result.inheritedRole] || 'Unknown';
+  const card = roleCardFor(result.inheritedRole);
+  return (
+    <div className="undertaker-reveal-overlay" role="alert" aria-live="assertive">
+      <div className="undertaker-reveal-sigil" aria-hidden="true">⚰</div>
+      <span>PRIVATE INHERITANCE · ONLY YOU CAN SEE THIS</span>
+      <h2>{inheritedName}</h2>
+      <p>You inherited the identity of {result.targetName || 'a departed soul'}.</p>
+      <div className={`undertaker-inherited-mark undertaker-mark-${card.className}`}>{card.rank}<small>{card.roleName}</small></div>
+      <strong>YOUR NEW ROLE BEGINS NEXT NIGHT</strong>
+    </div>
+  );
+}
+
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, actUndertaker, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady, narrationUnlocked, onEnableNarration, narrationPlaybackError }) {
   const isInPerson = snapshot.gameMode === 'in_person';
   const isNight = snapshot.phase === 'night';
   const isMafiaWakeStep = ['mafia', 'mafia_clash'].includes(snapshot.nightStep);
@@ -923,14 +1005,18 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const isTie = snapshot.phase === 'tieVoting';
   const isTransition = snapshot.phase === 'transition';
   const transitionElapsed = snapshot.transition?.startedAt ? Math.max(0, clock + serverOffset - snapshot.transition.startedAt) : 0;
-  const isRoleAction = isNight && snapshot.me.alive && (isInPerson
+  const isRoleAction = isNight && snapshot.me.alive && snapshot.me.roleActive !== false && (isInPerson
     ? (snapshot.me.role === 'mafia' ? isMafiaWakeStep : snapshot.me.role === 'angel' ? snapshot.nightStep === 'angel' : snapshot.me.role === 'sheriff' ? snapshot.nightStep === 'sheriff' : false)
     : ['mafia', 'sheriff', 'angel'].includes(snapshot.me.role));
+  const isUndertakerWindow = isNight && snapshot.me.alive && snapshot.me.role === 'undertaker'
+    && snapshot.me.roleActive !== false && !snapshot.me.undertakerUsed
+    && (isInPerson ? snapshot.nightStep === 'undertaker' : true);
+  const undertakerOptions = snapshot.me.undertakerOptions || [];
   const isVotePhase = snapshot.me.alive && (isVoting || isTie);
   const phaseTimer = countdown == null ? '—' : formatTime(countdown);
   const alivePlayers = snapshot.players.filter((player) => player.alive);
   const targetPlayers = alivePlayers.filter((player) => (player.id !== snapshot.me.id || (isNight && ['angel', 'mafia'].includes(snapshot.me.role))) && (!isTie || snapshot.tieCandidates.some((candidate) => candidate.id === player.id)));
-  const voiceEnabled = !isInPerson && snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia'));
+  const voiceEnabled = !isInPerson && snapshot.me.alive && (isDiscussion || isTie || (isNight && snapshot.me.role === 'mafia' && snapshot.me.roleActive !== false));
   const identityStorageKey = `hollow-role-seen:${snapshot.code}:${snapshot.me.id}`;
   const [identityVisible, setIdentityVisible] = useState(false);
   // Always show the private role reveal when a player enters the live game.
@@ -939,21 +1025,11 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   const [countdownNumber, setCountdownNumber] = useState(3);
   const [identityFlipped, setIdentityFlipped] = useState(false);
   const [hostControlsOpen, setHostControlsOpen] = useState(false);
+  const [undertakerTarget, setUndertakerTarget] = useState('');
   const [sheriffReveal, setSheriffReveal] = useState(null);
   const seenSheriffResultRef = useRef(snapshot.me.privateResults?.[0]?.id || null);
-  const roleCardStorageKey = `hollow-role-card:${snapshot.code}:${snapshot.me.id}`;
-  const [roleCard] = useState(() => {
-    try {
-      const stored = sessionStorage.getItem(roleCardStorageKey);
-      if (stored) return JSON.parse(stored);
-      const mafiaIndex = snapshot.me.role === 'mafia' ? Math.max(0, snapshot.me.mafiaTeam.findIndex((member) => member.id === snapshot.me.id)) : 0;
-      const card = roleCardFor(snapshot.me.role, mafiaIndex);
-      sessionStorage.setItem(roleCardStorageKey, JSON.stringify(card));
-      return card;
-    } catch {
-      return roleCardFor(snapshot.me.role, 0);
-    }
-  });
+  const mafiaCardIndex = snapshot.me.role === 'mafia' ? Math.max(0, snapshot.me.mafiaTeam.findIndex((member) => member.id === snapshot.me.id)) : 0;
+  const roleCard = useMemo(() => roleCardFor(snapshot.me.role, mafiaCardIndex), [snapshot.me.role, mafiaCardIndex]);
 
   const identityReadySentRef = useRef(false);
 
@@ -982,6 +1058,8 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
     return () => window.clearInterval(timer);
   }, [identitySequence]);
 
+  useEffect(() => { setUndertakerTarget(''); }, [snapshot.round, snapshot.phase, snapshot.nightStep]);
+
   const finishIdentityReveal = () => {
     try { sessionStorage.setItem(identityStorageKey, 'seen'); } catch { /* The card still works without storage. */ }
     setIdentitySequence('done');
@@ -994,12 +1072,22 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 
   useEffect(() => {
     const latestResult = snapshot.me.privateResults?.[0];
-    if (snapshot.me.role !== 'sheriff' || !latestResult || latestResult.id === seenSheriffResultRef.current) return undefined;
+    if (snapshot.me.role !== 'sheriff' || !latestResult || latestResult.undertakerTransfer || latestResult.id === seenSheriffResultRef.current) return undefined;
     seenSheriffResultRef.current = latestResult.id;
     setSheriffReveal(latestResult);
     const timer = window.setTimeout(() => setSheriffReveal(null), 2800);
     return () => window.clearTimeout(timer);
   }, [snapshot.me.privateResults?.[0]?.id, snapshot.me.role]);
+  const [undertakerReveal, setUndertakerReveal] = useState(null);
+  const seenUndertakerTransferRef = useRef(null);
+  useEffect(() => {
+    const latestResult = snapshot.me.privateResults?.[0];
+    if (!latestResult?.undertakerTransfer || latestResult.id === seenUndertakerTransferRef.current) return undefined;
+    seenUndertakerTransferRef.current = latestResult.id;
+    setUndertakerReveal(latestResult);
+    const timer = window.setTimeout(() => setUndertakerReveal(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [snapshot.me.privateResults?.[0]?.id]);
 
   const timerUrgent = countdown != null && countdown < 60_000;
   const chatTitle = isNight ? 'THE WHISPERS' : 'THE TABLE WHISPERS';
@@ -1038,7 +1126,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
       )}
       <div className="game-topline">
         <div><span className="room-pill">TABLE {snapshot.code}</span><span className="round-pill">ROUND {snapshot.round}</span></div>
-        {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{isInPerson && isNight ? (snapshot.nightStep === 'role_reveal' ? 'IDENTITY WINDOW' : snapshot.nightStep === 'mafia_clash' ? 'FINAL MAFIA WINDOW' : ['mafia', 'angel', 'sheriff'].includes(snapshot.nightStep) ? 'ACTION WINDOW' : 'THE HOUSE MOVES') : snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
+        {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{isInPerson && isNight ? (snapshot.nightStep === 'role_reveal' ? 'IDENTITY WINDOW' : snapshot.nightStep === 'mafia_clash' ? 'FINAL MAFIA WINDOW' : ['mafia', 'angel', 'sheriff', 'undertaker'].includes(snapshot.nightStep) ? 'ACTION WINDOW' : 'THE HOUSE MOVES') : snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
       </div>
       <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
 
@@ -1059,15 +1147,16 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
 
       {isInPerson && isNight && snapshot.nightCue && (
         <section className={`in-person-night-banner in-person-step-${snapshot.nightStep}`} key={snapshot.nightCue.id}>
-          <div className="in-person-night-sigil" aria-hidden="true">{snapshot.nightStep === 'mafia_clash' ? '⚔' : snapshot.nightStep === 'angel' ? '✧' : snapshot.nightStep === 'sheriff' ? '⌖' : '☾'}</div>
+          <div className="in-person-night-sigil" aria-hidden="true">{snapshot.nightStep === 'mafia_clash' ? '⚔' : snapshot.nightStep === 'angel' ? '✧' : snapshot.nightStep === 'sheriff' ? '⌖' : snapshot.nightStep === 'undertaker' ? '⚰' : '☾'}</div>
           <div className="in-person-night-copy"><small>THE VOICE OF THE HOUSE · {String(snapshot.nightStep || '').replaceAll('_', ' ').toUpperCase()}</small><h2>{snapshot.nightCue.title}</h2><p>{snapshot.nightCue.text}</p>{snapshot.nightStep === 'role_reveal' && snapshot.identityReadiness && <span className="in-person-identity-progress">{snapshot.identityReadiness.ready} / {snapshot.identityReadiness.required} HAVE ENTERED</span>}</div>
           <span className="in-person-night-edge" aria-hidden="true" />
         </section>
       )}
       {isTransition && <CinematicTransition transition={snapshot.transition} announcement={snapshot.announcement} voteReveal={snapshot.voteReveal} elapsed={transitionElapsed} />}
       {sheriffReveal && <SheriffRevealOverlay result={sheriffReveal} />}
+      {undertakerReveal && <UndertakerRevealOverlay result={undertakerReveal} />}
 
-      {snapshot.me.role === 'mafia' && snapshot.me.alive && identityVisible && (!isInPerson || !isNight || isMafiaWakeStep) && (
+      {snapshot.me.role === 'mafia' && snapshot.me.alive && snapshot.me.roleActive !== false && identityVisible && (!isInPerson || !isNight || isMafiaWakeStep) && (
         <section className="mafia-stage-intel" aria-label="Private Mafia team">
           <div className="mafia-stage-heading"><small>CLASSIFIED · MAFIA ONLY</small><strong>THE INNER CIRCLE</strong><span>{snapshot.me.mafiaTeam.length} IN THE HOUSE</span></div>
           <div className="mafia-stage-members">
@@ -1203,6 +1292,31 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             </section>
           )}
 
+          {isUndertakerWindow && (
+            <section className="panel action-panel undertaker-action-panel">
+              <div className="panel-kicker">PRIVATE · THE GRAVEYARD</div>
+              <h3>Choose an identity to inherit</h3>
+              {snapshot.me.myActionSubmitted ? (
+                <p className="undertaker-private-status">Your decision is sealed for tonight. No one else is told whether you accepted or declined.</p>
+              ) : undertakerOptions.length > 0 ? (
+                <>
+                  <p className="action-subtext">Your power may be used once. Choose one departed player. They remain eliminated; you keep your own name and seat. The inherited role starts next night. This decision is visible only to you.</p>
+                  <div className="target-list undertaker-target-list">
+                    {undertakerOptions.map((target) => (
+                      <button key={target.id} className={`target-option ${undertakerTarget === target.id ? 'chosen' : ''}`} onClick={() => setUndertakerTarget(target.id)}>
+                        <span className="target-avatar">{avatarFor(target.avatar).face}</span><span>{target.name}</span><i>{undertakerTarget === target.id ? '✦' : '○'}</i>
+                      </button>
+                    ))}
+                  </div>
+                  <button className="primary-button full-button" onClick={() => actUndertaker(undertakerTarget, false)} disabled={!undertakerTarget}>INHERIT THIS IDENTITY</button>
+                  <button className="outline-button full-button undertaker-decline-button" onClick={() => actUndertaker(null, true)}>NOT THIS NIGHT · KEEP MY POWER</button>
+                </>
+              ) : (
+                <p className="undertaker-private-status">The graveyard has no eligible identity yet. Your power remains unused. The public call is made every night regardless.</p>
+              )}
+            </section>
+          )}
+
           {(isRoleAction || isVotePhase) && (
             <section className="panel action-panel">
               <div className="panel-kicker">{isNight ? 'PRIVATE NIGHT ACTION' : 'CAST YOUR VOTE'}</div>
@@ -1226,7 +1340,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
             </section>
           )}
 
-          {isNight && !isRoleAction && snapshot.me.alive && <div className={`panel waiting-panel ${isInPerson ? 'in-person-waiting-panel' : ''}`}><div className="waiting-orbit">☾</div><h3>{isInPerson ? 'KEEP YOUR EYES CLOSED' : 'The town is asleep'}</h3><p>{isInPerson ? 'The house has not summoned your role. Keep your phone silent and your eyes closed; your private action will appear only when it is your turn.' : 'Wait for the morning bell. The night actions are hidden from you.'}</p></div>}
+          {isNight && !isRoleAction && snapshot.me.alive && <div className={`panel waiting-panel ${isInPerson ? 'in-person-waiting-panel' : ''}`}><div className="waiting-orbit">☾</div><h3>{isInPerson ? 'KEEP YOUR EYES CLOSED' : 'The town is asleep'}</h3><p>{isInPerson ? 'The house keeps the same public sequence every night. Keep your phone silent and your eyes closed; private actions appear only on the player’s own screen.' : 'Wait for the morning bell. The night actions are hidden from you.'}</p></div>}
           {!snapshot.me.alive && <div className="panel ghost-observer-panel"><div className="waiting-orbit">👁</div><h3>You are beyond the table</h3><p>The dead cannot vote, chat, or take night actions. Watch silently until the final verdict.</p></div>}
 
           {snapshot.me.isHost && (
@@ -1276,7 +1390,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               <div ref={chatEndRef} />
             </div>
             <form className="chat-form" onSubmit={sendChat}>
-              <input value={messageText} onChange={(event) => setMessageText(event.target.value.slice(0, 350))} placeholder={snapshot.me.alive ? 'Whisper to the table…' : 'The dead cannot speak…'} disabled={!snapshot.me.alive || !(isDiscussion || isVoting || isTie || (isNight && snapshot.me.role === 'mafia'))} />
+              <input value={messageText} onChange={(event) => setMessageText(event.target.value.slice(0, 350))} placeholder={snapshot.me.alive ? 'Whisper to the table…' : 'The dead cannot speak…'} disabled={!snapshot.me.alive || !(isDiscussion || isVoting || isTie || (isNight && snapshot.me.role === 'mafia' && snapshot.me.roleActive !== false))} />
               <button type="submit" disabled={!messageText.trim() || !snapshot.me.alive}>↗</button>
             </form>
           </section>

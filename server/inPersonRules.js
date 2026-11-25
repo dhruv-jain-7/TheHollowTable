@@ -1,6 +1,7 @@
 /**
  * Pure rules used by the In-Person flow. Keeping these outside index.js makes
  * the timing and Mafia-resolution rules deterministic and independently testable.
+ * HOLLOW_STAGE_8_UNDERTAKER_ROLE: fixed Angel/Sheriff/Undertaker calls never signal private state.
  */
 export const IN_PERSON_NIGHT_STEP_SECONDS = Object.freeze({
   role_reveal: 45,
@@ -12,6 +13,10 @@ export const IN_PERSON_NIGHT_STEP_SECONDS = Object.freeze({
   angel_sleep: 5,
   sheriff: 30,
   sheriff_sleep: 5,
+  // Keep the Undertaker window fixed on every night, even when the role is
+  // absent, dead, has no eligible graveyard choice, or already used its power.
+  // The identical public timing prevents the table from inferring private state.
+  undertaker: 30,
   town_wake: 5,
 });
 
@@ -22,6 +27,7 @@ export const IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS = Object.freeze({
   mafia_clash: 11,
   angel: 11,
   sheriff: 10,
+  undertaker: 10,
 });
 
 export const IN_PERSON_VOTE_SECONDS = 30;
@@ -115,21 +121,20 @@ export function getInPersonMafiaStepOutcome(step, decision, { timedOut = false }
   return null;
 }
 
-export function getInPersonNextNightStep(step, {
-  hasConnectedMafia = false,
-  hasConnectedAngel = false,
-  hasConnectedSheriff = false,
-} = {}) {
+export function getInPersonNextNightStep(step) {
+  // The public role-call sequence never changes according to which roles are
+  // alive, connected, configured, or have already used a private ability.
   const next = {
     role_reveal: 'town_sleep',
-    town_sleep: hasConnectedMafia ? 'mafia' : 'mafia_sleep',
+    town_sleep: 'mafia',
     mafia: 'mafia_sleep',
     mafia_clash: 'mafia_sleep',
-    mafia_sleep: hasConnectedAngel ? 'angel' : 'angel_sleep',
+    mafia_sleep: 'angel',
     angel: 'angel_sleep',
-    angel_sleep: hasConnectedSheriff ? 'sheriff' : 'sheriff_sleep',
+    angel_sleep: 'sheriff',
     sheriff: 'sheriff_sleep',
-    sheriff_sleep: 'town_wake',
+    sheriff_sleep: 'undertaker',
+    undertaker: 'town_wake',
     town_wake: null,
   };
   return Object.hasOwn(next, step) ? next[step] : null;
@@ -139,6 +144,7 @@ export function inPersonRoleStep(role) {
   if (role === 'mafia') return ['mafia', 'mafia_clash'];
   if (role === 'angel') return ['angel'];
   if (role === 'sheriff') return ['sheriff'];
+  if (role === 'undertaker') return ['undertaker'];
   return [];
 }
 

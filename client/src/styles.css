@@ -1068,3 +1068,80 @@ h1, h2, h3, p { margin-top: 0; }
   .narrator-unlock-banner { align-items: stretch; flex-direction: column; }
   .narrator-unlock-banner button { width: 100%; }
 }
+
+/* Stage 8 — optional Undertaker identity and accessible role reference */
+.identity-card-undertaker .identity-card-front,
+.identity-card-undertaker .card-art { color: #d8c4a2; }
+.identity-card-undertaker .identity-card-front { background: radial-gradient(ellipse at 50% 42%, #3e3432 0%, #171416 56%, #080708 100%); border-color: rgba(191, 157, 112, .72); }
+.identity-card-undertaker .card-suit-watermark { color: rgba(203, 177, 139, .12); }
+.identity-card-undertaker .card-face-title { color: #ead9bd; text-shadow: 0 0 18px rgba(185, 142, 94, .34); }
+.identity-card-undertaker .card-face-motto { color: #b7a48a; }
+
+.know-roles-button { flex: 0 0 auto; border: 1px solid rgba(191, 151, 103, .48); border-radius: 999px; padding: 9px 13px; color: #e2c69e; background: rgba(42, 25, 25, .7); font: 800 10px var(--mono); letter-spacing: .11em; cursor: pointer; transition: border-color .2s ease, background .2s ease, transform .2s ease; }
+.know-roles-button:hover { border-color: rgba(231, 184, 125, .9); background: rgba(94, 36, 35, .55); transform: translateY(-1px); }
+.rules-modal-backdrop { position: fixed; inset: 0; z-index: 2200; display: grid; place-items: center; padding: clamp(10px, 3vw, 30px); background: rgba(3, 2, 4, .86); backdrop-filter: blur(12px); animation: rules-backdrop-in .2s ease both; }
+.rules-modal { position: relative; width: min(100%, 1080px); max-height: min(92vh, 980px); overflow: auto; padding: clamp(22px, 4vw, 48px); border: 1px solid rgba(183, 132, 86, .42); border-radius: 22px; color: #efe2d1; background: radial-gradient(ellipse at 50% -10%, rgba(111, 34, 39, .34), transparent 48%), linear-gradient(145deg, #1c1416, #090809 68%); box-shadow: 0 28px 100px rgba(0,0,0,.72), inset 0 0 64px rgba(119, 39, 41, .12); }
+.rules-modal::before { content: '☠'; position: absolute; top: 16px; right: 54px; color: rgba(205, 158, 109, .07); font-size: clamp(100px, 17vw, 190px); line-height: 1; pointer-events: none; }
+.rules-modal-close { position: sticky; float: right; top: 0; z-index: 2; display: grid; place-items: center; width: 38px; height: 38px; margin: -6px -6px 0 12px; border: 1px solid rgba(212, 171, 130, .4); border-radius: 50%; color: #f1dcc1; background: rgba(0,0,0,.58); font-size: 26px; cursor: pointer; }
+.rules-modal > .eyebrow { margin-bottom: 10px; }
+.rules-modal > h2 { position: relative; z-index: 1; margin: 0; color: #f2e2d0; font: 900 clamp(34px, 6vw, 62px)/1 var(--gothic); letter-spacing: .035em; }
+.rules-modal > h2 em { color: #c28a62; font-style: normal; }
+.rules-modal-intro { max-width: 720px; margin: 14px 0 26px; color: rgba(235, 219, 201, .74); font-size: 15px; line-height: 1.65; }
+.rules-role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rules-role-card { display: grid; grid-template-columns: 48px minmax(0,1fr); gap: 14px; padding: 17px; border: 1px solid rgba(193, 160, 125, .18); border-radius: 14px; background: linear-gradient(135deg, rgba(53, 34, 34, .66), rgba(12, 11, 13, .82)); }
+.rules-role-rank { display: grid; place-items: center; width: 46px; height: 62px; border: 1px solid rgba(209, 174, 135, .5); border-radius: 8px; color: #e5c9a3; background: linear-gradient(155deg, #39292a, #111012); font: 900 30px var(--gothic); box-shadow: 0 0 20px rgba(160, 70, 57, .12); }
+.rules-role-card small { color: #b38b69; font: 800 9px var(--mono); letter-spacing: .16em; }
+.rules-role-card h3 { margin: 4px 0 6px; color: #f0e0cc; font: 800 20px var(--gothic); }
+.rules-role-card p { margin: 0; color: rgba(232, 220, 205, .76); font-size: 13px; line-height: 1.58; }
+.rules-role-mafia .rules-role-rank { color: #ffaaa2; border-color: rgba(201, 61, 66, .55); }
+.rules-role-sheriff .rules-role-rank { color: #e5c17b; }
+.rules-role-angel .rules-role-rank { color: #f1c5d7; }
+.rules-role-undertaker .rules-role-rank { color: #d5c1a0; border-color: rgba(178, 144, 103, .7); box-shadow: 0 0 26px rgba(171, 129, 79, .16); }
+.rules-flow-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.rules-flow-grid article { padding: 17px; border: 1px solid rgba(175, 132, 94, .23); border-radius: 13px; background: rgba(5,5,7,.42); }
+.rules-flow-grid article > span { color: #b9825f; font: 800 10px var(--mono); letter-spacing: .13em; }
+.rules-flow-grid h3 { margin: 8px 0; color: #efdfcb; font: 800 19px var(--gothic); }
+.rules-flow-grid p { margin: 7px 0 0; color: rgba(231, 216, 198, .73); font-size: 12px; line-height: 1.6; }
+.rules-flow-grid b { color: #edcda1; }
+.rules-privacy-note { display: flex; gap: 13px; align-items: center; margin-top: 16px; padding: 13px 16px; border-left: 3px solid rgba(174, 128, 82, .7); background: rgba(87, 47, 39, .17); }
+.rules-privacy-note > span { color: #c59b6f; font-size: 25px; }
+.rules-privacy-note p { margin: 0; color: rgba(238, 222, 203, .76); font-size: 12px; line-height: 1.55; }
+.rules-modal-continue { margin-top: 18px; }
+@keyframes rules-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+
+.undertaker-setting-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 17px 0; padding: 15px; border: 1px solid rgba(185, 147, 100, .34); border-radius: 12px; background: linear-gradient(120deg, rgba(51, 38, 36, .75), rgba(14, 13, 14, .88)); }
+.undertaker-setting-card > div:first-child { display: grid; gap: 5px; }
+.undertaker-setting-card .panel-kicker { color: #b89266; font-size: 9px; }
+.undertaker-setting-card strong { color: #f0dfc9; font: 800 18px var(--gothic); }
+.undertaker-setting-card small { color: rgba(230, 216, 198, .67); font-size: 11px; line-height: 1.45; }
+.undertaker-choice { display: flex; flex: 0 0 auto; gap: 5px; padding: 4px; border: 1px solid rgba(193, 154, 107, .24); border-radius: 999px; background: rgba(0,0,0,.35); }
+.undertaker-choice button { border: 0; border-radius: 999px; padding: 10px 12px; color: rgba(238, 222, 201, .6); background: transparent; font: 800 9px var(--mono); cursor: pointer; }
+.undertaker-choice button.selected { color: #1a1110; background: linear-gradient(120deg, #dfbd91, #a87954); box-shadow: 0 3px 12px rgba(0,0,0,.24); }
+.undertaker-action-panel { border-color: rgba(174, 134, 91, .55); background: radial-gradient(ellipse at 50% 0%, rgba(96, 72, 48, .25), transparent 58%), linear-gradient(145deg, rgba(30, 24, 25, .98), rgba(8, 8, 10, .98)); }
+.undertaker-private-status { padding: 14px; border: 1px solid rgba(190, 150, 105, .25); border-radius: 10px; color: #e1c8a4; background: rgba(99, 69, 43, .14); font-size: 13px; line-height: 1.6; }
+.undertaker-decline-button { margin-top: 9px; }
+.undertaker-reveal-overlay { position: fixed; z-index: 1200; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; color: #eee0cc; background: radial-gradient(ellipse at 50% 40%, rgba(70, 57, 45, .98), rgba(10, 9, 11, .99) 70%); border: 7px solid rgba(178, 145, 104, .23); box-shadow: inset 0 0 100px rgba(0,0,0,.8); animation: sheriff-result-in .3s ease-out both; }
+.undertaker-reveal-sigil { color: rgba(212, 181, 139, .24); font-size: 62px; }
+.undertaker-reveal-overlay > span { color: #c9a77e; font: 800 10px var(--mono); letter-spacing: .19em; }
+.undertaker-reveal-overlay h2 { margin: 0; color: #f2dfc3; font: 900 clamp(45px, 8vw, 92px)/1 var(--gothic); text-shadow: 0 0 32px rgba(182, 142, 96, .32); }
+.undertaker-reveal-overlay p { margin: 0; color: rgba(239, 224, 203, .72); font-size: 15px; }
+.undertaker-inherited-mark { display: grid; place-items: center; width: 98px; height: 130px; border: 2px solid rgba(207, 175, 132, .65); border-radius: 9px; color: #f0d6ad; background: linear-gradient(150deg, #37292a, #111012); font: 900 58px var(--gothic); box-shadow: 0 0 36px rgba(181, 128, 82, .2); }
+.undertaker-inherited-mark small { font: 800 8px var(--mono); letter-spacing: .08em; }
+.undertaker-reveal-overlay > strong { color: #cba77e; font: 800 10px var(--mono); letter-spacing: .17em; }
+@media (max-width: 780px) {
+  .rules-flow-grid { grid-template-columns: 1fr; }
+  .rules-modal { max-height: 94vh; }
+}
+@media (max-width: 620px) {
+  .know-roles-button { padding: 8px 9px; font-size: 8px; letter-spacing: .05em; }
+  .rules-role-grid { grid-template-columns: 1fr; }
+  .rules-modal { padding: 21px 15px; border-radius: 14px; }
+  .rules-modal-intro { font-size: 13px; }
+  .rules-role-card p, .rules-flow-grid p { font-size: 12px; }
+  .undertaker-setting-card { align-items: stretch; flex-direction: column; }
+  .undertaker-choice { align-self: stretch; }
+  .undertaker-choice button { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rules-modal-backdrop, .undertaker-reveal-overlay { animation-duration: .01ms !important; }
+}

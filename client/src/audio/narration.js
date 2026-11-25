@@ -8,6 +8,8 @@ const NIGHT_STEP_CLIPS = Object.freeze({
   angel_sleep: 'angel_sleep',
   sheriff: 'sheriff_awaken',
   sheriff_sleep: 'sheriff_sleep',
+  // Exactly one Undertaker call; no public sleep/result/selection clip exists.
+  undertaker: 'undertaker_awaken',
   town_wake: 'town_wake',
 });
 

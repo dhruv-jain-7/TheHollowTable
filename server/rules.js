@@ -1,3 +1,4 @@
+// HOLLOW_STAGE_8_UNDERTAKER_ROLE: copied abilities are gated until roleActiveFromRound.
 export function canTargetSelf(role) {
   return role === 'angel' || role === 'mafia';
 }
@@ -65,9 +66,11 @@ export function getWinner(players) {
 }
 
 export function getNightActionProgress(room) {
-  const livingMafia = room.players.filter((p) => p.alive && p.role === 'mafia');
-  const sheriff = room.players.find((p) => p.alive && p.role === 'sheriff');
-  const angel = room.players.find((p) => p.alive && p.role === 'angel');
+  const livingMafia = room.players.filter((p) => p.alive && p.role === 'mafia'
+    && (p.roleActiveFromRound == null || Number(p.roleActiveFromRound) <= Number(room.round || 0)));
+  const isActive = (p) => p.roleActiveFromRound == null || Number(p.roleActiveFromRound) <= Number(room.round || 0);
+  const sheriff = room.players.find((p) => p.alive && p.role === 'sheriff' && isActive(p));
+  const angel = room.players.find((p) => p.alive && p.role === 'angel' && isActive(p));
   const mafiaVotes = room.actions.mafiaVotes ?? {};
   const mafiaSubmitted = livingMafia.filter((p) => typeof mafiaVotes[p.id] === 'string').length;
   const mafiaTargets = livingMafia.map((p) => mafiaVotes[p.id]).filter(Boolean);

@@ -11,7 +11,7 @@ const manifest = JSON.parse(await readFile(path.join(root, 'scripts/narration-ma
 const clipIds = new Set(manifest.clips.map((clip) => clip.id));
 
 test('every narration mapping points to a generated clip', () => {
-  const nightSteps = ['role_reveal', 'town_sleep', 'mafia', 'mafia_clash', 'mafia_sleep', 'angel', 'angel_sleep', 'sheriff', 'sheriff_sleep', 'town_wake'];
+  const nightSteps = ['role_reveal', 'town_sleep', 'mafia', 'mafia_clash', 'mafia_sleep', 'angel', 'angel_sleep', 'sheriff', 'sheriff_sleep', 'undertaker', 'town_wake'];
   const snapshots = nightSteps.map((nightStep) => ({
     gameMode: 'in_person', status: 'playing', phase: 'night', nightStep,
     nightCue: { id: `cue-${nightStep}`, cueId: `cue-${nightStep}` },
@@ -54,8 +54,27 @@ test('Sheriff private results are never used as public narration', () => {
 
 test('night narration receives a minimum playback window before early role advancement', () => {
   assert.deepEqual(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS, {
-    role_reveal: 12, mafia: 11, mafia_clash: 11, angel: 11, sheriff: 10,
+    role_reveal: 12, mafia: 11, mafia_clash: 11, angel: 11, sheriff: 10, undertaker: 10,
   });
+});
+
+
+test('Undertaker receives exactly one identical public wake-up cue regardless of private state', () => {
+  const snapshots = [
+    { undertakerUsed: false, role: 'undertaker' },
+    { undertakerUsed: true, role: 'mafia' },
+    { undertakerUsed: false, role: 'citizen' },
+  ].map((me, index) => ({
+    gameMode: 'in_person', status: 'playing', phase: 'night', nightStep: 'undertaker',
+    nightCue: { cueId: `undertaker-${index}` }, me,
+  }));
+  const cues = snapshots.map(getNarrationCue);
+  assert.deepEqual(cues.map((cue) => cue.clip), ['undertaker_awaken', 'undertaker_awaken', 'undertaker_awaken']);
+  assert.ok(!clipIds.has('undertaker_sleep'));
+  const undertakerClip = manifest.clips.find((clip) => clip.id === 'undertaker_awaken');
+  assert.equal(undertakerClip.text, '[low, grave, calm, unmistakable] Undertaker, wake up.');
+  assert.equal(JSON.stringify(cues).includes('undertakerUsed'), false);
+  assert.equal(JSON.stringify(cues).includes('targetName'), false);
 });
 
 test('narration pack stays within the local generation safety budget', () => {

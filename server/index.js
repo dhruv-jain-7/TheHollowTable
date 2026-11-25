@@ -9,6 +9,7 @@ import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { Pool } from 'pg';
 // HOLLOW_STAGE_4_5_IN_PERSON_NIGHT_FLOW: the server owns every In-Person phase transition.
+// HOLLOW_STAGE_8_UNDERTAKER_ROLE: a private, one-use identity transfer shared by both game modes.
 import {
   IN_PERSON_NIGHT_STEP_SECONDS,
   IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS,
@@ -20,6 +21,14 @@ import {
   allConnectedPlayersReady,
 } from './inPersonRules.js';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import {
+  UNDERTAKER_MAX_PER_GAME,
+  getUndertakerCandidates,
+  canUndertakerAct,
+  resolveUndertakerChoice,
+  toUndertakerPrivateOptions,
+  isRoleActive,
+} from './undertakerRules.js';
 import {
   getDiscussionSeconds,
   getMafiaCap,
@@ -96,7 +105,7 @@ const NARRATOR_VOICE_ID = 'bvopWwMi3nfE38bLXN5w';
 const REQUIRED_NARRATION_CLIPS = [
   'narrator_test', 'role_reveal', 'town_sleep', 'mafia_awaken', 'mafia_clash',
   'mafia_sleep', 'angel_awaken', 'angel_sleep', 'sheriff_awaken', 'sheriff_sleep',
-  'town_wake', 'day_discussion', 'voting_begins', 'tie_announcement', 'tie_voting',
+  'undertaker_awaken', 'town_wake', 'day_discussion', 'voting_begins', 'tie_announcement', 'tie_voting',
   'murder_report', 'quiet_report', 'elimination_report', 'no_elimination',
   'departure_report', 'mafia_victory', 'town_victory',
 ];
@@ -162,6 +171,8 @@ function freshActions() {
     angelTarget: null,
     dayVotes: {},
     dayReady: {},
+    // One private decision per night; never included in public room snapshots.
+    undertakerDecision: null,
   };
 }
 
@@ -187,6 +198,14 @@ function livingPlayers(room) {
   return room.players.filter((player) => player.alive);
 }
 
+function roleIsActive(player, room) {
+  return isRoleActive(player, room.round);
+}
+
+function undertakerCandidates(room) {
+  return getUndertakerCandidates(room.players);
+}
+
 function makeAnnouncement(kind, title, text, accent = 'red', extra = {}) {
   return { id: randomUUID(), kind, title, text, accent, ...extra, createdAt: Date.now() };
 }
@@ -201,6 +220,9 @@ const IN_PERSON_NIGHT_CUES = {
   angel_sleep: ['THE HOUSE FALLS QUIET', 'The next secret is being called. Keep your eyes closed.', 'muted'],
   sheriff: ['SHERIFF, AWAKEN', 'Choose one living soul to investigate. Your result will be shown only on your phone.', 'gold'],
   sheriff_sleep: ['THE HOUSE FALLS QUIET', 'The last secret of the night is being sealed. Keep your eyes closed.', 'muted'],
+  // This is the only public Undertaker cue. There is deliberately no public
+  // follow-up announcing acceptance, a selected identity, or whether the power was used.
+  undertaker: ['UNDERTAKER, AWAKEN', 'Undertaker, awaken. The house has one more secret to keep.', 'gold'],
   town_wake: ['TOWN, OPEN YOUR EYES', 'The house has finished its work. Dawn is breaking.', 'red'],
 };
 
@@ -220,11 +242,11 @@ function enterInPersonNightStep(room, step, durationSeconds = IN_PERSON_NIGHT_ST
 }
 
 function livingConnectedMafia(room) {
-  return room.players.filter((entry) => entry.alive && entry.connected && entry.role === 'mafia');
+  return room.players.filter((entry) => entry.alive && entry.connected && entry.role === 'mafia' && roleIsActive(entry, room));
 }
 
 function inPersonMafiaDecision(room) {
-  const livingMafia = room.players.filter((entry) => entry.alive && entry.role === 'mafia');
+  const livingMafia = room.players.filter((entry) => entry.alive && entry.role === 'mafia' && roleIsActive(entry, room));
   const connectedMafia = livingConnectedMafia(room);
   const livingTargets = livingPlayers(room).map((entry) => entry.id);
   return getInPersonMafiaDecision(
@@ -272,22 +294,9 @@ function reconcileInPersonNightProgress(room) {
   if (room.nightStep === 'mafia' || room.nightStep === 'mafia_clash') {
     return progressInPersonMafia(room);
   }
-  if (room.nightStep === 'angel') {
-    const hasConnectedAngel = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'angel');
-    const readyToSleep = Boolean(room.actions.angelTarget) && (!room.nightStepMinUntil || Date.now() >= room.nightStepMinUntil);
-    if (!hasConnectedAngel || readyToSleep) {
-      enterInPersonNightStep(room, 'angel_sleep');
-      return true;
-    }
-  }
-  if (room.nightStep === 'sheriff') {
-    const hasConnectedSheriff = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'sheriff');
-    const readyToSleep = Boolean(room.actions.sheriffTarget) && (!room.nightStepMinUntil || Date.now() >= room.nightStepMinUntil);
-    if (!hasConnectedSheriff || readyToSleep) {
-      enterInPersonNightStep(room, 'sheriff_sleep');
-      return true;
-    }
-  }
+  // Angel, Sheriff and Undertaker windows always run to their fixed deadline.
+  // This keeps public cue order and timing identical whether a role is absent,
+  // dead, disconnected, has no eligible target, or has already used its power.
   return false;
 }
 
@@ -306,27 +315,12 @@ function advanceInPersonNightStep(room, { timedOut = false } = {}) {
     case 'mafia':
     case 'mafia_clash':
       return progressInPersonMafia(room, { timedOut });
-    case 'mafia_sleep': {
-      const hasAngel = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'angel');
-      const nextStep = getInPersonNextNightStep(room.nightStep, { hasConnectedAngel: hasAngel });
-      if (nextStep === 'angel_sleep') enterInPersonNightStep(room, nextStep);
-      else enterInPersonNightStep(room, nextStep);
-      return true;
-    }
+    case 'mafia_sleep':
     case 'angel':
-      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep));
-      return true;
-    case 'angel_sleep': {
-      const hasSheriff = room.players.some((entry) => entry.alive && entry.connected && entry.role === 'sheriff');
-      const nextStep = getInPersonNextNightStep(room.nightStep, { hasConnectedSheriff: hasSheriff });
-      if (nextStep === 'sheriff_sleep') enterInPersonNightStep(room, nextStep);
-      else enterInPersonNightStep(room, nextStep);
-      return true;
-    }
+    case 'angel_sleep':
     case 'sheriff':
-      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep));
-      return true;
     case 'sheriff_sleep':
+    case 'undertaker':
       enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep));
       return true;
     case 'town_wake':
@@ -367,6 +361,7 @@ function roleDescription(role, gameMode = 'online') {
     angel: inPerson
       ? 'Protect one living player, including yourself, when the house calls you. Your first confirmation locks immediately. You cannot protect the same person on consecutive nights.'
       : 'Protect one player each night, including yourself. You may change your choice until the night ends. Your protection is never revealed.',
+    undertaker: 'Once per game, from Round 2 onward and when a previous player has fallen, privately inherit one departed player’s role. Their seat stays empty; you keep your own name and seat. The inherited role becomes active on the following night. Declining or timing out preserves your unused power.',
     citizen: 'Listen, discuss, and vote to find the Mafia.',
   };
   return descriptions[role] ?? '';
@@ -378,22 +373,27 @@ function makeSnapshot(room, playerId) {
   if (!me) return null;
   const revealAll = room.status === 'finished';
   const narrator = room.gameMode === 'in_person' ? playerById(room, room.narratorId || room.hostId) : null;
-  const mafiaTeam = me.role === 'mafia' && me.alive
-    ? room.players.filter((p) => p.role === 'mafia').map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, alive: p.alive }))
+  const meRoleActive = roleIsActive(me, room);
+  const undertakerOptions = room.status === 'playing' && room.phase === 'night'
+    && canUndertakerAct(me, room.round, undertakerCandidates(room), { phase: room.phase, nightStep: room.nightStep, gameMode: room.gameMode })
+    ? toUndertakerPrivateOptions(undertakerCandidates(room)) : [];
+  const mafiaTeam = me.role === 'mafia' && me.alive && meRoleActive
+    ? room.players.filter((p) => p.role === 'mafia' && roleIsActive(p, room)).map((p) => ({ id: p.id, name: p.name, avatar: p.avatar, alive: p.alive }))
     : [];
   const myActionSubmitted = room.phase === 'night'
     ? (me.role === 'mafia' ? Boolean(room.actions.mafiaVotes[me.id])
       : me.role === 'sheriff' ? Boolean(room.actions.sheriffTarget)
-        : me.role === 'angel' ? Boolean(room.actions.angelTarget) : false)
+        : me.role === 'angel' ? Boolean(room.actions.angelTarget)
+          : me.role === 'undertaker' ? Boolean(room.actions.undertakerDecision) : false)
     : ['voting', 'tieVoting'].includes(room.phase) ? Object.hasOwn(room.actions.dayVotes, me.id) : false;
   const inPersonMafiaDecision = room.gameMode === 'in_person' && room.phase === 'night'
     ? inPersonMafiaDecisionSnapshot(room) : null;
-  const chat = room.chat.filter((message) => message.scope === 'public' || (message.scope === 'mafia' && me.role === 'mafia' && me.alive));
+  const chat = room.chat.filter((message) => message.scope === 'public' || (message.scope === 'mafia' && me.role === 'mafia' && me.alive && meRoleActive));
   const dayReady = room.actions.dayReady ?? {};
   const nightProgress = room.phase === 'night' ? getNightActionProgress(room) : null;
   const maySeeMafiaChoices = room.gameMode !== 'in_person' || ['mafia', 'mafia_clash'].includes(room.nightStep);
-  const mafiaChoices = me.role === 'mafia' && me.alive && maySeeMafiaChoices
-    ? room.players.filter((player) => player.alive && player.role === 'mafia').map((player) => {
+  const mafiaChoices = me.role === 'mafia' && me.alive && meRoleActive && maySeeMafiaChoices
+    ? room.players.filter((player) => player.alive && player.role === 'mafia' && roleIsActive(player, room)).map((player) => {
         const targetId = room.actions.mafiaVotes?.[player.id];
         const target = targetId ? playerById(room, targetId) : null;
         return { id: player.id, name: player.name, avatar: player.avatar, connected: player.connected, targetName: target?.alive ? target.name : null, submitted: Boolean(targetId) };
@@ -409,7 +409,7 @@ function makeSnapshot(room, playerId) {
     serverNow: Date.now(),
     status: room.status,
     hostId: room.hostId,
-    settings: { ...room.settings },
+    settings: { ...room.settings, undertakerCount: room.settings.undertakerCount === 1 ? 1 : 0 },
     playerCount: room.players.length,
     players: room.players.map((player) => ({
       id: player.id,
@@ -458,6 +458,9 @@ function makeSnapshot(room, playerId) {
       avatar: me.avatar,
       role: me.role ?? null,
       roleDescription: me.role ? roleDescription(me.role, room.gameMode) : '',
+      roleActive: meRoleActive,
+      undertakerUsed: Boolean(me.undertakerUsed),
+      undertakerOptions,
       alive: me.alive,
       connected: me.connected,
       isHost: me.id === room.hostId,
@@ -468,7 +471,7 @@ function makeSnapshot(room, playerId) {
       privateResults: me.privateResults ?? [],
     },
     actionProgress: room.phase === 'night'
-      ? me.role === 'mafia' && me.alive ? (room.gameMode === 'in_person' ? {
+      ? me.role === 'mafia' && me.alive && meRoleActive ? (room.gameMode === 'in_person' ? {
           submitted: inPersonMafiaDecision?.submitted ?? 0,
           required: inPersonMafiaDecision?.required ?? 0,
           mafiaAgreed: Boolean(inPersonMafiaDecision?.winnerId),
@@ -542,6 +545,11 @@ async function initializeDatabase() {
       ? (playerById(room, room.narratorId) ? room.narratorId : room.hostId)
       : null;
     room.narratorReadyId = null;
+    room.actions ??= freshActions();
+    room.actions.undertakerDecision ??= null;
+    room.settings ??= {};
+    room.settings.undertakerCount = room.settings.undertakerCount === 1 ? 1 : 0;
+    for (const player of room.players) { player.undertakerUsed = Boolean(player.undertakerUsed); }
     room.nightStep ??= null;
     room.nightCue ??= null;
     room.identityReady ??= {};
@@ -801,7 +809,7 @@ function createVoteReveal(room) {
 }
 
 function getMafiaVoteState(room) {
-  const livingMafia = room.players.filter((player) => player.alive && player.role === 'mafia');
+  const livingMafia = room.players.filter((player) => player.alive && player.role === 'mafia' && roleIsActive(player, room));
   const votes = livingMafia
     .map((player) => ({ playerId: player.id, targetId: room.actions.mafiaVotes?.[player.id] }))
     .filter((vote) => vote.targetId && playerById(room, vote.targetId)?.alive);
@@ -871,6 +879,7 @@ function forfeitPlayer(room, player) {
   player.alive = false;
   player.connected = false;
   player.eliminatedAt = Date.now();
+  player.eliminationKind = 'departure';
   removeEliminatedPlayerFromVoice(room, player);
   room.announcement = makeAnnouncement(
     'departure',
@@ -889,6 +898,7 @@ function eliminatePlayer(room, targetId, type) {
   target.alive = false;
   removeEliminatedPlayerFromVoice(room, target);
   target.eliminatedAt = Date.now();
+  target.eliminationKind = type === 'murder' ? 'murder' : 'vote';
   if (type === 'murder') {
     room.announcement = makeAnnouncement(
       'murder',
@@ -1131,7 +1141,7 @@ io.on('connection', (socket) => {
         narratorId: gameMode === 'in_person' ? id : null,
         narratorReadyId: null,
         hostGraceUntil: null,
-        settings: { maxPlayers, mafiaCount: Math.min(2, getMafiaCap(maxPlayers)) },
+        settings: { maxPlayers, mafiaCount: Math.min(2, getMafiaCap(maxPlayers)), undertakerCount: 0 },
         players: [{ id, name, avatar, tokenHash: hashToken(token), role: null, alive: true, connected: true, joinedAt: Date.now(), privateResults: [] }],
         phase: 'lobby',
         round: 0,
@@ -1215,11 +1225,16 @@ io.on('connection', (socket) => {
     if (room.hostId !== player.id) return error('Only the host can change table settings.');
     const maxPlayers = Number(payload.maxPlayers);
     const mafiaCount = Number(payload.mafiaCount);
+    const undertakerCount = payload.undertakerCount === undefined
+      ? (room.settings.undertakerCount === 1 ? 1 : 0)
+      : Number(payload.undertakerCount);
     if (!Number.isInteger(maxPlayers) || maxPlayers < 5 || maxPlayers > 16) return error('Player limit must be between 5 and 16.');
     if (maxPlayers < room.players.length) return error('Player limit cannot be lower than the number of people already seated.');
     if (!Number.isInteger(mafiaCount) || mafiaCount < 1 || mafiaCount > getMafiaCap(maxPlayers)) return error(`Mafia count must be between 1 and ${getMafiaCap(maxPlayers)} for this player limit.`);
+    if (!Number.isInteger(undertakerCount) || undertakerCount < 0 || undertakerCount > UNDERTAKER_MAX_PER_GAME) return error('Undertaker count must be 0 or 1.');
     room.settings.maxPlayers = maxPlayers;
     room.settings.mafiaCount = mafiaCount;
+    room.settings.undertakerCount = undertakerCount;
     await commit(room);
     return success();
   }));
@@ -1274,10 +1289,17 @@ io.on('connection', (socket) => {
     sheriff.role = 'sheriff';
     const angel = remaining.splice(randomBytes(2).readUInt16BE(0) % remaining.length, 1)[0];
     angel.role = 'angel';
+    if (room.settings.undertakerCount === 1) {
+      const undertaker = remaining.splice(randomBytes(2).readUInt16BE(0) % remaining.length, 1)[0];
+      undertaker.role = 'undertaker';
+      undertaker.undertakerUsed = false;
+      undertaker.roleActiveFromRound = 1;
+    }
     remaining.forEach((entry) => { entry.role = 'citizen'; });
     room.status = 'playing';
     room.round = 1;
     room.angelLastProtectedTargetId = null;
+    room.players.forEach((entry) => { entry.undertakerUsed = false; entry.roleActiveFromRound = 1; entry.eliminationKind = null; });
     room.phase = 'night';
     room.phaseMinUntil = null;
     room.actions = freshActions();
@@ -1316,6 +1338,7 @@ io.on('connection', (socket) => {
   socket.on('night:act', withPlayer(socket, 'night:act', async (room, player, payload) => {
     if (room.status !== 'playing' || room.phase !== 'night') return error('Night actions are not open.');
     if (!player.alive) return error('Ghosts cannot perform night actions.');
+    if (!roleIsActive(player, room)) return error('Your inherited role becomes active on the next night.');
     const target = playerById(room, String(payload.targetId || ''));
     if (!target || !target.alive) return error('Choose a living player.');
     // Mafia may deliberately select themselves; Angel may protect themselves.
@@ -1341,7 +1364,7 @@ io.on('connection', (socket) => {
         if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
         if (target.id === player.id) return error('You cannot investigate yourself.');
         room.actions.sheriffTarget = target.id;
-        const isMafia = target.role === 'mafia';
+        const isMafia = target.role === 'mafia' && roleIsActive(target, room);
         addPrivateResult(
           player,
           `${target.name} is ${isMafia ? 'MAFIA' : 'NOT MAFIA'}.`,
@@ -1362,7 +1385,7 @@ io.on('connection', (socket) => {
     } else if (player.role === 'sheriff') {
       if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
       room.actions.sheriffTarget = target.id;
-      const isMafia = target.role === 'mafia';
+      const isMafia = target.role === 'mafia' && roleIsActive(target, room);
       addPrivateResult(
         player,
         `${target.name} is ${isMafia ? 'MAFIA' : 'NOT MAFIA'}.`,
@@ -1379,6 +1402,48 @@ io.on('connection', (socket) => {
     }
     await commit(room);
     return success({ submitted: true });
+  }));
+
+  socket.on('night:undertaker', withPlayer(socket, 'night:undertaker', async (room, player, payload) => {
+    if (room.status !== 'playing' || room.phase !== 'night') return error('The night has ended.');
+    if (room.phaseEndsAt && Date.now() >= room.phaseEndsAt) return error('The Undertaker window has closed.');
+    if (!player.alive) return error('The fallen cannot inherit an identity.');
+    if (player.role !== 'undertaker' || player.undertakerUsed) return error('Your one-time inheritance is not available.');
+    if (!roleIsActive(player, room)) return error('Your role is not active yet.');
+    if (room.gameMode === 'in_person' && room.nightStep !== 'undertaker') return error('The Undertaker has not been summoned.');
+    if (room.round < 2) return error('The graveyard opens after the first round.');
+    if (room.actions.undertakerDecision) return error('Your decision for this night is already sealed.');
+
+    const candidates = undertakerCandidates(room);
+    if (payload.decline === true) {
+      room.actions.undertakerDecision = 'declined';
+      await commit(room);
+      return success({ declined: true, powerPreserved: true });
+    }
+
+    const target = candidates.find((entry) => entry.id === String(payload.targetId || ''));
+    if (!target) return error('That identity is no longer available in the graveyard.');
+    const result = resolveUndertakerChoice(player, target, room.round);
+    if (!result.ok) return error('That identity cannot be inherited.');
+
+    // Commit the inherited faction/role immediately for parity checks, but gate
+    // every copied night ability until the following round.
+    player.role = result.inheritedRole;
+    player.undertakerUsed = true;
+    player.roleActiveFromRound = result.activeFromRound;
+    room.actions.undertakerDecision = { targetId: target.id, inheritedRole: result.inheritedRole };
+    addPrivateResult(
+      player,
+      `You inherited the ${result.inheritedRole.toUpperCase()} identity of ${target.name}. Your new role becomes active next night.`,
+      result.inheritedRole === 'mafia' ? 'danger' : 'success',
+      { targetName: target.name, targetAvatar: target.avatar, inheritedRole: result.inheritedRole, undertakerTransfer: true },
+    );
+    // Do not end the game at the moment of inheritance: the converted role is
+    // privately revealed only to this player, and victory is evaluated at the
+    // normal end-of-night resolution in both modes. This avoids a public timing
+    // signal and preserves the full In-Person cue sequence through town wake.
+    await commit(room);
+    return success({ inherited: true, activeFromRound: result.activeFromRound });
   }));
 
   socket.on('day:ready', withPlayer(socket, 'day:ready', async (room, player) => {
@@ -1466,7 +1531,7 @@ io.on('connection', (socket) => {
     if (!chatAllowed(player.id)) return error('Slow down. The house is listening.');
     let scope = 'public';
     if (room.phase === 'night') {
-      if (player.role !== 'mafia') return error('The town is silent during the night.');
+      if (player.role !== 'mafia' || !roleIsActive(player, room)) return error('The town is silent during the night.');
       scope = 'mafia';
     } else if (!['discussion', 'voting', 'tieVoting'].includes(room.phase)) {
       return error('Chat is closed during this phase.');
@@ -1559,7 +1624,7 @@ app.post('/api/voice-token', async (req, res) => {
     const player = room.players.find((entry) => entry.tokenHash === hashToken(token));
     if (!player || !player.alive || !player.connected) return res.status(403).json({ error: 'Only living, connected players can use voice chat.' });
     const allowedPhase = ['discussion', 'voting', 'tieVoting'].includes(room.phase)
-      || (room.phase === 'night' && player.role === 'mafia');
+      || (room.phase === 'night' && player.role === 'mafia' && roleIsActive(player, room));
     if (!allowedPhase) return res.status(403).json({ error: 'Voice chat is closed during this phase.' });
     const voiceRoom = room.phase === 'night' ? `hollow-${room.code}-night-${room.round}` : `hollow-${room.code}-day-${room.round}`;
     const accessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {

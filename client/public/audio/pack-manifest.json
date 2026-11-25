@@ -4,7 +4,7 @@
   "voiceId": "bvopWwMi3nfE38bLXN5w",
   "modelId": "eleven_v4",
   "outputFormat": "mp3_44100_128",
-  "createdAt": "2026-11-25T16:23:27.371Z",
+  "createdAt": "2026-11-25T17:03:21.946Z",
   "clips": {
     "narrator_test": {
       "file": "narrator_test.mp3",
@@ -137,8 +137,14 @@
       "characters": 129,
       "bytes": 137969,
       "sha256": "c52138b2ee3fe5f41b40ec0e02d3f4f4ab3d516969232aec85655948d1cca0ba"
+    },
+    "undertaker_awaken": {
+      "file": "undertaker_awaken.mp3",
+      "characters": 53,
+      "bytes": 39331,
+      "sha256": "c793dcbe3ca072851658ba2c87c97c65b78d6ca729400081a7315a9c36aaadd9"
     }
   },
   "complete": true,
-  "completedAt": "2026-11-25T16:23:28.283Z"
+  "completedAt": "2026-11-25T17:03:22.891Z"
 }

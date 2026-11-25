@@ -46,6 +46,10 @@
       "text": "[deep, quiet, conclusive] Sheriff, close your eyes. The last secret is sealed."
     },
     {
+      "id": "undertaker_awaken",
+      "text": "[low, grave, calm, unmistakable] Undertaker, wake up."
+    },
+    {
       "id": "town_wake",
       "text": "[rising, resonant, dramatic] Town, open your eyes. Dawn has reached the house."
     },

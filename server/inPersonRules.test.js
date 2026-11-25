@@ -16,6 +16,7 @@ test('In-Person action windows are bounded and match the table sequence', () => 
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.mafia_clash, 15);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.angel, 30);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.sheriff, 30);
+  assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.undertaker, 30);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.role_reveal, 45);
   assert.equal(IN_PERSON_VOTE_SECONDS, 30);
 });
@@ -102,6 +103,7 @@ test('role-action permissions map only to the intended sequential step', () => {
   assert.deepEqual(inPersonRoleStep('mafia'), ['mafia', 'mafia_clash']);
   assert.deepEqual(inPersonRoleStep('angel'), ['angel']);
   assert.deepEqual(inPersonRoleStep('sheriff'), ['sheriff']);
+  assert.deepEqual(inPersonRoleStep('undertaker'), ['undertaker']);
   assert.deepEqual(inPersonRoleStep('citizen'), []);
 });
 
@@ -171,15 +173,13 @@ test('a disconnected Mafia who never submitted cannot block consensus, but their
 });
 
 
-test('night sequence preserves Mafia → Angel → Sheriff order and skips absent roles', () => {
+test('public night sequence always calls Angel, Sheriff and Undertaker in the same order', () => {
   assert.equal(getInPersonNextNightStep('role_reveal'), 'town_sleep');
-  assert.equal(getInPersonNextNightStep('town_sleep', { hasConnectedMafia: true }), 'mafia');
-  assert.equal(getInPersonNextNightStep('town_sleep', { hasConnectedMafia: false }), 'mafia_sleep');
-  assert.equal(getInPersonNextNightStep('mafia_sleep', { hasConnectedAngel: true }), 'angel');
-  assert.equal(getInPersonNextNightStep('mafia_sleep', { hasConnectedAngel: false }), 'angel_sleep');
-  assert.equal(getInPersonNextNightStep('angel_sleep', { hasConnectedSheriff: true }), 'sheriff');
-  assert.equal(getInPersonNextNightStep('angel_sleep', { hasConnectedSheriff: false }), 'sheriff_sleep');
-  assert.equal(getInPersonNextNightStep('sheriff_sleep'), 'town_wake');
+  assert.equal(getInPersonNextNightStep('town_sleep'), 'mafia');
+  assert.equal(getInPersonNextNightStep('mafia_sleep'), 'angel');
+  assert.equal(getInPersonNextNightStep('angel_sleep'), 'sheriff');
+  assert.equal(getInPersonNextNightStep('sheriff_sleep'), 'undertaker');
+  assert.equal(getInPersonNextNightStep('undertaker'), 'town_wake');
   assert.equal(getInPersonNextNightStep('town_wake'), null);
 });
 
