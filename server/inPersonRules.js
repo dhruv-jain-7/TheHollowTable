@@ -1,7 +1,7 @@
 /**
  * Pure rules used by the In-Person flow. Keeping these outside index.js makes
  * the timing and Mafia-resolution rules deterministic and independently testable.
- * HOLLOW_STAGE_8_UNDERTAKER_ROLE: fixed Angel/Sheriff/Undertaker calls never signal private state.
+ * HOLLOW_STAGE_8_UNDERTAKER_ROLE: public role calls are fixed after Night 1; Night 1 skips the closed graveyard.
  */
 export const IN_PERSON_NIGHT_STEP_SECONDS = Object.freeze({
   role_reveal: 45,
@@ -23,6 +23,11 @@ export const IN_PERSON_NIGHT_STEP_SECONDS = Object.freeze({
 export const IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS = Object.freeze({
   // Keep the server from advancing past a public spoken cue before it has time to finish.
   role_reveal: 12,
+  // Every sleep instruction gets a little extra settling time before the next role is called.
+  town_sleep: 2,
+  mafia_sleep: 2,
+  angel_sleep: 2,
+  sheriff_sleep: 2,
   mafia: 11,
   mafia_clash: 11,
   angel: 11,
@@ -31,6 +36,25 @@ export const IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS = Object.freeze({
 });
 
 export const IN_PERSON_VOTE_SECONDS = 30;
+
+/**
+ * End a confirmed role-action window early without cutting off its spoken cue.
+ * `minimumUntil` is the cue playback floor; `actionDelaySeconds` is the extra
+ * time the player gets after submitting (Angel: 2s, Sheriff: 5s).
+ */
+export function getInPersonActionCompletionDeadline({
+  now,
+  minimumUntil = 0,
+  actionDelaySeconds,
+  currentDeadline,
+}) {
+  const timestamp = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const delay = Math.max(0, Number(actionDelaySeconds) || 0) * 1000;
+  const cueFloor = Math.max(0, Number(minimumUntil) || 0);
+  const proposed = Math.max(timestamp + delay, cueFloor);
+  const current = Number(currentDeadline);
+  return Number.isFinite(current) && current > 0 ? Math.min(current, proposed) : proposed;
+}
 
 export function getInPersonDiscussionSeconds(livingPlayerCount) {
   const count = Number.isFinite(Number(livingPlayerCount)) ? Math.max(0, Number(livingPlayerCount)) : 0;
@@ -121,9 +145,10 @@ export function getInPersonMafiaStepOutcome(step, decision, { timedOut = false }
   return null;
 }
 
-export function getInPersonNextNightStep(step) {
-  // The public role-call sequence never changes according to which roles are
-  // alive, connected, configured, or have already used a private ability.
+export function getInPersonNextNightStep(step, { round = 2 } = {}) {
+  // The Undertaker is not called on Night 1 because the graveyard is still closed.
+  // From Night 2 onward the public role-call sequence remains fixed, regardless of
+  // whether the Undertaker is alive, connected, configured, or has used the power.
   const next = {
     role_reveal: 'town_sleep',
     town_sleep: 'mafia',
@@ -133,7 +158,7 @@ export function getInPersonNextNightStep(step) {
     angel: 'angel_sleep',
     angel_sleep: 'sheriff',
     sheriff: 'sheriff_sleep',
-    sheriff_sleep: 'undertaker',
+    sheriff_sleep: Number(round) === 1 ? 'town_wake' : 'undertaker',
     undertaker: 'town_wake',
     town_wake: null,
   };

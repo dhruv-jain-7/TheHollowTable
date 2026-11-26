@@ -54,7 +54,8 @@ test('Sheriff private results are never used as public narration', () => {
 
 test('night narration receives a minimum playback window before early role advancement', () => {
   assert.deepEqual(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS, {
-    role_reveal: 12, mafia: 11, mafia_clash: 11, angel: 11, sheriff: 10, undertaker: 10,
+    role_reveal: 12, town_sleep: 2, mafia_sleep: 2, angel_sleep: 2, sheriff_sleep: 2,
+    mafia: 11, mafia_clash: 11, angel: 11, sheriff: 10, undertaker: 10,
   });
 });
 

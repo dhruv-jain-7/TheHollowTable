@@ -18,6 +18,7 @@ import {
   getInPersonMafiaDecision,
   getInPersonMafiaStepOutcome,
   getInPersonNextNightStep,
+  getInPersonActionCompletionDeadline,
   allConnectedPlayersReady,
 } from './inPersonRules.js';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
@@ -261,6 +262,16 @@ function inPersonMafiaDecisionSnapshot(room) {
   return inPersonMafiaDecision(room);
 }
 
+function shortenConfirmedRoleActionWindow(room, actionDelaySeconds) {
+  if (room.gameMode !== 'in_person' || room.phase !== 'night' || !room.phaseEndsAt) return;
+  room.phaseEndsAt = getInPersonActionCompletionDeadline({
+    now: Date.now(),
+    minimumUntil: room.nightStepMinUntil,
+    actionDelaySeconds,
+    currentDeadline: room.phaseEndsAt,
+  });
+}
+
 function beginMafiaSleep(room, targetId = null) {
   room.inPersonMafiaTargetId = targetId && playerById(room, targetId)?.alive ? targetId : null;
   enterInPersonNightStep(room, 'mafia_sleep');
@@ -304,10 +315,10 @@ function advanceInPersonNightStep(room, { timedOut = false } = {}) {
   if (room.status !== 'playing' || room.phase !== 'night') return false;
   switch (room.nightStep) {
     case 'role_reveal':
-      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep));
+      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep, { round: room.round }));
       return true;
     case 'town_sleep': {
-      const nextStep = getInPersonNextNightStep(room.nightStep, { hasConnectedMafia: livingConnectedMafia(room).length > 0 });
+      const nextStep = getInPersonNextNightStep(room.nightStep, { round: room.round, hasConnectedMafia: livingConnectedMafia(room).length > 0 });
       if (nextStep === 'mafia_sleep') beginMafiaSleep(room);
       else enterInPersonNightStep(room, nextStep);
       return true;
@@ -321,7 +332,7 @@ function advanceInPersonNightStep(room, { timedOut = false } = {}) {
     case 'sheriff':
     case 'sheriff_sleep':
     case 'undertaker':
-      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep));
+      enterInPersonNightStep(room, getInPersonNextNightStep(room.nightStep, { round: room.round }));
       return true;
     case 'town_wake':
       resolveNight(room);
@@ -1358,6 +1369,7 @@ io.on('connection', (socket) => {
           return error('You cannot protect the same player in consecutive rounds. Choose someone else this night.');
         }
         room.actions.angelTarget = target.id;
+        shortenConfirmedRoleActionWindow(room, 2);
         reconcileInPersonNightProgress(room);
       } else if (player.role === 'sheriff') {
         if (room.nightStep !== 'sheriff') return error('The Sheriff is not being summoned right now.');
@@ -1371,6 +1383,7 @@ io.on('connection', (socket) => {
           isMafia ? 'danger' : 'success',
           { targetName: target.name, targetAvatar: target.avatar },
         );
+        shortenConfirmedRoleActionWindow(room, 5);
         reconcileInPersonNightProgress(room);
       } else {
         return error('Your role has no night action.');
@@ -1404,6 +1417,8 @@ io.on('connection', (socket) => {
     return success({ submitted: true });
   }));
 
+  // Keep the public Undertaker deadline fixed: shortening it after a private choice
+  // would let other players infer whether the one-use power was available or used.
   socket.on('night:undertaker', withPlayer(socket, 'night:undertaker', async (room, player, payload) => {
     if (room.status !== 'playing' || room.phase !== 'night') return error('The night has ended.');
     if (room.phaseEndsAt && Date.now() >= room.phaseEndsAt) return error('The Undertaker window has closed.');

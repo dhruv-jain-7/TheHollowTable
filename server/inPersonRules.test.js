@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   IN_PERSON_NIGHT_STEP_SECONDS,
+  IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS,
   IN_PERSON_VOTE_SECONDS,
   getInPersonDiscussionSeconds,
   getInPersonMafiaDecision,
   getInPersonMafiaStepOutcome,
   getInPersonNextNightStep,
+  getInPersonActionCompletionDeadline,
   inPersonRoleStep,
   allConnectedPlayersReady,
 } from './inPersonRules.js';
@@ -17,6 +19,10 @@ test('In-Person action windows are bounded and match the table sequence', () => 
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.angel, 30);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.sheriff, 30);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.undertaker, 30);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.town_sleep, 2);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.mafia_sleep, 2);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.angel_sleep, 2);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.sheriff_sleep, 2);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.role_reveal, 45);
   assert.equal(IN_PERSON_VOTE_SECONDS, 30);
 });
@@ -173,14 +179,36 @@ test('a disconnected Mafia who never submitted cannot block consensus, but their
 });
 
 
-test('public night sequence always calls Angel, Sheriff and Undertaker in the same order', () => {
-  assert.equal(getInPersonNextNightStep('role_reveal'), 'town_sleep');
-  assert.equal(getInPersonNextNightStep('town_sleep'), 'mafia');
-  assert.equal(getInPersonNextNightStep('mafia_sleep'), 'angel');
-  assert.equal(getInPersonNextNightStep('angel_sleep'), 'sheriff');
-  assert.equal(getInPersonNextNightStep('sheriff_sleep'), 'undertaker');
-  assert.equal(getInPersonNextNightStep('undertaker'), 'town_wake');
-  assert.equal(getInPersonNextNightStep('town_wake'), null);
+test('the Undertaker is skipped on Night 1 and called from Night 2 onward', () => {
+  assert.equal(getInPersonNextNightStep('role_reveal', { round: 1 }), 'town_sleep');
+  assert.equal(getInPersonNextNightStep('town_sleep', { round: 1 }), 'mafia');
+  assert.equal(getInPersonNextNightStep('mafia_sleep', { round: 1 }), 'angel');
+  assert.equal(getInPersonNextNightStep('angel_sleep', { round: 1 }), 'sheriff');
+  assert.equal(getInPersonNextNightStep('sheriff_sleep', { round: 1 }), 'town_wake');
+  assert.equal(getInPersonNextNightStep('sheriff_sleep', { round: 2 }), 'undertaker');
+  assert.equal(getInPersonNextNightStep('undertaker', { round: 2 }), 'town_wake');
+  assert.equal(getInPersonNextNightStep('town_wake', { round: 2 }), null);
+});
+
+test('confirmed Angel action advances after two seconds but never cuts off the spoken cue', () => {
+  assert.equal(getInPersonActionCompletionDeadline({
+    now: 1000, minimumUntil: 0, actionDelaySeconds: 2, currentDeadline: 41000,
+  }), 3000);
+  assert.equal(getInPersonActionCompletionDeadline({
+    now: 1000, minimumUntil: 12000, actionDelaySeconds: 2, currentDeadline: 41000,
+  }), 12000);
+});
+
+test('confirmed Sheriff action leaves five seconds to view the private result', () => {
+  assert.equal(getInPersonActionCompletionDeadline({
+    now: 5000, minimumUntil: 0, actionDelaySeconds: 5, currentDeadline: 41000,
+  }), 10000);
+});
+
+test('role action completion never extends an existing public window', () => {
+  assert.equal(getInPersonActionCompletionDeadline({
+    now: 5000, minimumUntil: 0, actionDelaySeconds: 5, currentDeadline: 7000,
+  }), 7000);
 });
 
 
