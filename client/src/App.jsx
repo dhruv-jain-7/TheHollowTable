@@ -518,6 +518,17 @@ function App() {
       </header>
 
       {(errorMessage || notice) && <div className={`toast ${errorMessage ? 'toast-error' : 'toast-good'}`}>{errorMessage || notice}</div>}
+      {snapshot?.clockQuarantined && (
+        <div className="announcement announcement-red system-clock-quarantine" role="alert">
+          <div className="announcement-side" aria-hidden="true">☠</div>
+          <div>
+            <div className="announcement-kicker">TABLE INTERRUPTED · GAME CLOCK PAUSED</div>
+            <h2>THE TABLE HAS BEEN SEALED</h2>
+            <p>This table was paused after a technical issue to protect the game. Other tables are unaffected. Please create a new table to continue playing.</p>
+          </div>
+          <div className="announcement-side" aria-hidden="true">☠</div>
+        </div>
+      )}
       {snapshot?.status === 'finished' && snapshot.gameMode === 'in_person' && snapshot.me.isNarrator && !narrationUnlocked && (
         <div className="narrator-unlock-banner narrator-finished-unlock" role="status">
           <div><strong>THE FINAL VERDICT IS READY</strong><span>{narrationPlaybackError || 'Enable this phone to hear the final announcement.'}</span></div>

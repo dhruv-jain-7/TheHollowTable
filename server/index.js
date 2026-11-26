@@ -40,6 +40,13 @@ import {
   allPlayersReady,
   canTargetSelf,
 } from './rules.js';
+import {
+  createBooleanReadinessCache,
+  createNonOverlappingTask,
+  createTokenBucket,
+  runRoomBatchSafely,
+  shiftRestoredRoomTimers,
+} from './runtimeSafety.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3001);
@@ -68,7 +75,8 @@ const io = new Server(server, {
   },
   pingInterval: 25000,
   pingTimeout: 20000,
-  maxHttpBufferSize: 1e6,
+  // Game events are small JSON payloads. A 16 KB ceiling limits oversized packets.
+  maxHttpBufferSize: 16 * 1024,
 });
 
 app.use(helmet({
@@ -82,8 +90,17 @@ const rooms = new Map();
 const socketByPlayer = new Map();
 const joinAttempts = new Map();
 const chatAttempts = new Map();
+const pendingRoomSaves = new Map();
 let pool = null;
 let livekitRoomService = null;
+let lastDatabaseHeartbeatAt = 0;
+let roomTickTimer = null;
+let shuttingDown = false;
+const ROOM_SAVE_DEBOUNCE_MS = 350;
+const ROOM_SAVE_RETRY_MS = 2_000;
+const DATABASE_HEARTBEAT_INTERVAL_MS = 10_000;
+const SOCKET_EVENT_RATE = Math.max(1, Number(process.env.SOCKET_EVENT_RATE) || 15);
+const SOCKET_EVENT_BURST = Math.max(SOCKET_EVENT_RATE, Number(process.env.SOCKET_EVENT_BURST) || 30);
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const AVATAR_IDS = new Set(['raven','skull','ghost','bat','wolf','cat','owl','spider','moth','snake','candle','rose','moon','pumpkin','key','crow','coffin','crystal','mask','poison','blackheart','eye','rose2','moon2']);
@@ -111,7 +128,7 @@ const REQUIRED_NARRATION_CLIPS = [
   'departure_report', 'mafia_victory', 'town_victory',
 ];
 
-function isInPersonVoicePackReady() {
+function inspectInPersonVoicePack() {
   const audioDir = path.resolve(__dirname, '../client/public/audio');
   try {
     const pack = JSON.parse(readFileSync(path.join(audioDir, 'pack-manifest.json'), 'utf8'));
@@ -125,6 +142,12 @@ function isInPersonVoicePackReady() {
   } catch {
     return false;
   }
+}
+
+// H6: check the shipped voice pack once at startup, not synchronously for every player snapshot.
+const narratorVoicePackReadiness = createBooleanReadinessCache(inspectInPersonVoicePack);
+function isInPersonVoicePackReady() {
+  return narratorVoicePackReadiness.read();
 }
 
 function hashToken(token) {
@@ -416,6 +439,7 @@ function makeSnapshot(room, playerId) {
     narratorId: narrator?.id ?? null,
     narrator: narrator ? { id: narrator.id, name: narrator.name, avatar: narrator.avatar, connected: narrator.connected } : null,
     voicePackReady: room.gameMode === 'in_person' ? isInPersonVoicePackReady() : false,
+    clockQuarantined: Boolean(room.clockQuarantined),
     narratorAudioReady: room.gameMode === 'in_person' && Boolean(narrator && room.narratorReadyId === narrator.id),
     serverNow: Date.now(),
     status: room.status,
@@ -504,23 +528,95 @@ function makeSnapshot(room, playerId) {
   };
 }
 
+function scheduleRoomSave(code, delayMs = ROOM_SAVE_DEBOUNCE_MS) {
+  const entry = pendingRoomSaves.get(code);
+  if (!entry || !pool) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    void flushRoomSave(code);
+  }, delayMs);
+  entry.timer.unref?.();
+}
+
+async function flushRoomSave(code) {
+  const entry = pendingRoomSaves.get(code);
+  if (!entry || !pool) return;
+  if (entry.flushPromise) return entry.flushPromise;
+  if (entry.timer) {
+    clearTimeout(entry.timer);
+    entry.timer = null;
+  }
+
+  entry.flushPromise = (async () => {
+    while (entry.snapshot && pool) {
+      const snapshot = entry.snapshot;
+      entry.snapshot = null;
+      const expiresAt = new Date(Date.now() + ROOM_TTL_HOURS * 60 * 60 * 1000);
+      try {
+        await pool.query(
+          `INSERT INTO hollow_rooms (code, state, updated_at, expires_at)
+           VALUES ($1, $2::jsonb, NOW(), $3)
+           ON CONFLICT (code) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW(), expires_at = EXCLUDED.expires_at`,
+          [code, snapshot, expiresAt],
+        );
+      } catch (err) {
+        // Keep the newest snapshot queued and retry. A stale write must never win over a newer one.
+        entry.snapshot = entry.snapshot ?? snapshot;
+        console.error(`Could not persist room ${code}:`, err.message);
+        break;
+      }
+    }
+  })();
+
+  try {
+    await entry.flushPromise;
+  } finally {
+    entry.flushPromise = null;
+  }
+
+  if (entry.snapshot) scheduleRoomSave(code, ROOM_SAVE_RETRY_MS);
+  else pendingRoomSaves.delete(code);
+}
+
 async function saveRoom(room) {
   if (!pool || !room) return;
   try {
-    const expiresAt = new Date(Date.now() + ROOM_TTL_HOURS * 60 * 60 * 1000);
-    await pool.query(
-      `INSERT INTO hollow_rooms (code, state, updated_at, expires_at)
-       VALUES ($1, $2::jsonb, NOW(), $3)
-       ON CONFLICT (code) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW(), expires_at = EXCLUDED.expires_at`,
-      [room.code, JSON.stringify(room), expiresAt],
-    );
+    let entry = pendingRoomSaves.get(room.code);
+    if (!entry) {
+      entry = { snapshot: null, timer: null, flushPromise: null };
+      pendingRoomSaves.set(room.code, entry);
+    }
+    // Trailing debounce coalesces bursts; a running flush serializes any newer snapshot after the current write.
+    entry.snapshot = JSON.stringify(room);
+    scheduleRoomSave(room.code);
   } catch (err) {
-    console.error('Could not persist room:', err.message);
+    console.error(`Could not queue room ${room.code} for persistence:`, err.message);
   }
+}
+
+async function flushAllRoomSaves() {
+  const codes = [...pendingRoomSaves.keys()];
+  await Promise.all(codes.map(async (code) => {
+    const entry = pendingRoomSaves.get(code);
+    if (entry?.timer) {
+      clearTimeout(entry.timer);
+      entry.timer = null;
+    }
+    await flushRoomSave(code);
+  }));
 }
 
 async function deleteRoom(code) {
   rooms.delete(code);
+  const entry = pendingRoomSaves.get(code);
+  if (entry) {
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = null;
+    entry.snapshot = null;
+    if (entry.flushPromise) await entry.flushPromise;
+    pendingRoomSaves.delete(code);
+  }
   if (pool) {
     try { await pool.query('DELETE FROM hollow_rooms WHERE code = $1', [code]); }
     catch (err) { console.error('Could not delete room:', err.message); }
@@ -546,10 +642,15 @@ async function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS hollow_rooms_expires_at_idx ON hollow_rooms (expires_at);
   `);
-  const { rows } = await pool.query('SELECT state FROM hollow_rooms WHERE expires_at > NOW()');
+  const { rows } = await pool.query('SELECT state, updated_at FROM hollow_rooms WHERE expires_at > NOW()');
   for (const row of rows) {
     const room = row.state;
     if (!room || !room.code || !Array.isArray(room.players)) continue;
+    const restoredAt = Date.now();
+    const downtimeMs = shiftRestoredRoomTimers(room, row.updated_at, restoredAt);
+    if (downtimeMs > 0) {
+      console.log(`Restored table ${room.code} with ${Math.round(downtimeMs / 1000)}s of paused downtime.`);
+    }
     // HOLLOW_STAGE_2_MODE_SELECTION: rooms saved before this update remain Online.
     room.gameMode = room.gameMode === 'in_person' ? 'in_person' : 'online';
     room.narratorId = room.gameMode === 'in_person'
@@ -568,10 +669,15 @@ async function initializeDatabase() {
     for (const player of room.players) { player.connected = false; player.disconnectAt = Date.now(); }
     // Give the original host a reconnect window after a server restart/deploy.
     // Without this, the first guest to resume can accidentally take host ownership.
-    room.hostGraceUntil = Date.now() + RECONNECT_GRACE_MS;
+    room.hostGraceUntil = restoredAt + RECONNECT_GRACE_MS;
+    room.clockQuarantined = Boolean(room.clockQuarantined);
     rooms.set(room.code, room);
+    // Persist the adjusted deadlines immediately so a second restart cannot shift them twice.
+    await saveRoom(room);
   }
   await pool.query('DELETE FROM hollow_rooms WHERE expires_at <= NOW()');
+  await flushAllRoomSaves();
+  lastDatabaseHeartbeatAt = Date.now();
   console.log(`Restored ${rooms.size} game room(s) from PostgreSQL.`);
 }
 
@@ -610,8 +716,12 @@ function emitRoom(room) {
     if (!player.connected) continue;
     const socketId = socketByPlayer.get(player.id);
     if (!socketId) continue;
-    const snapshot = makeSnapshot(room, player.id);
-    if (snapshot) io.to(socketId).emit('room:state', snapshot);
+    try {
+      const snapshot = makeSnapshot(room, player.id);
+      if (snapshot) io.to(socketId).emit('room:state', snapshot);
+    } catch (err) {
+      console.error(`Could not build snapshot for room ${room.code}, player ${player.id}:`, err);
+    }
   }
 }
 
@@ -998,89 +1108,147 @@ function resolveDayVoting(room, isTieBreak = false) {
   startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
 }
 
-async function tickRooms() {
-  const now = Date.now();
-  for (const room of [...rooms.values()]) {
-    let changed = false;
+async function quarantineRoomClock(room, err) {
+  if (room.clockQuarantined) return;
+  room.clockQuarantined = true;
+  room.phaseEndsAt = null;
+  room.phaseMinUntil = null;
+  room.nightStepMinUntil = null;
+  room.nightStep = null;
+  room.nightCue = null;
+  room.transition = null;
+  room.announcement = makeAnnouncement(
+    'system-error',
+    'THE TABLE HAS BEEN SEALED',
+    'A technical issue interrupted this table. This room has been paused to protect the game. Other tables are unaffected. Please create a new table.',
+    'red',
+  );
+  room.lastActivityAt = Date.now();
+  console.error(`Game clock quarantined room ${room.code}:`, err);
+  try { emitRoom(room); }
+  catch (emitError) { console.error(`Could not publish pause notice for room ${room.code}:`, emitError); }
+  await saveRoom(room);
+}
 
-    // A brief grace period lets someone recover from a refresh, network dip, or accidental tab close.
-    for (const player of [...room.players]) {
-      if (player.connected || !player.disconnectAt || now - player.disconnectAt < RECONNECT_GRACE_MS) continue;
-      player.disconnectAt = null;
-      player.tokenHash = null;
-      if (room.status === 'lobby') {
-        room.players = room.players.filter((entry) => entry.id !== player.id);
-      } else if (room.status === 'playing' && player.alive) {
-        forfeitPlayer(room, player);
-        clearPlayerActions(room, player);
-        if (room.gameMode === 'in_person') {
-          reconcileInPersonNightProgress(room);
-          reconcileInPersonDayProgress(room);
-        }
-      }
-      if (room.hostId === player.id) {
-        room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id
-          ?? room.players.find((entry) => entry.id !== player.id)?.id
-          ?? null;
-        room.hostGraceUntil = null;
-      }
-      if (room.gameMode === 'in_person') repairNarrator(room, true);
-      changed = true;
-    }
-
-    if (room.status === 'lobby' && room.players.length === 0) {
-      await deleteRoom(room.code);
-      continue;
-    }
-    if (changed && room.status === 'playing') {
-      if (reconcileAfterRosterChange(room)) {
-        // A disconnect can change the faction balance; publish the final verdict.
-      } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
-        room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
-        startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
-      } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
-        resolveDayVoting(room, room.phase === 'tieVoting');
-      }
-    }
-
-    if (room.hostGraceUntil && now >= room.hostGraceUntil) {
-      const nextHost = room.players.find((player) => player.connected)?.id;
-      if (nextHost) room.hostId = nextHost;
-      room.hostGraceUntil = null;
-      changed = true;
-    }
-
-    if (room.status === 'playing' && room.gameMode === 'in_person' && room.phase === 'night') {
-      if (room.nightStepMinUntil && now >= room.nightStepMinUntil && reconcileInPersonNightProgress(room)) changed = true;
-      if (room.phase === 'night' && room.phaseEndsAt && now >= room.phaseEndsAt) {
-        advanceInPersonNightStep(room, { timedOut: true });
-        changed = true;
-      }
-    } else if (room.status === 'playing' && room.gameMode === 'in_person' && ['discussion', 'voting', 'tieVoting'].includes(room.phase)) {
-      if (room.phaseMinUntil && now >= room.phaseMinUntil && reconcileInPersonDayProgress(room)) changed = true;
-      if (!changed && room.phaseEndsAt && now >= room.phaseEndsAt) {
-        if (room.phase === 'discussion') beginVoting(room);
-        else if (room.phase === 'voting') resolveDayVoting(room, false);
-        else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
-        changed = true;
-      }
-    } else if (room.status === 'playing' && room.phase === 'night' && room.gameMode !== 'in_person' && extendForMafiaConflict(room, now)) {
-      changed = true;
-    } else if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
-      if (room.phase === 'night') resolveNight(room);
-      else if (room.phase === 'discussion') beginVoting(room);
-      else if (room.phase === 'voting') resolveDayVoting(room, false);
-      else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
-      else if (room.phase === 'transition') completeTransition(room);
-      changed = true;
-    }
-
+async function processRoomTick(room, now) {
+  if (room.clockQuarantined) {
     if (now - (room.lastActivityAt || room.createdAt || now) > ROOM_TTL_HOURS * 60 * 60 * 1000) {
       await deleteRoom(room.code);
-      continue;
     }
-    if (changed) await commit(room);
+    return;
   }
+  let changed = false;
+
+  // A brief grace period lets someone recover from a refresh, network dip, or accidental tab close.
+  for (const player of [...room.players]) {
+    if (player.connected || !player.disconnectAt || now - player.disconnectAt < RECONNECT_GRACE_MS) continue;
+    player.disconnectAt = null;
+    player.tokenHash = null;
+    if (room.status === 'lobby') {
+      room.players = room.players.filter((entry) => entry.id !== player.id);
+    } else if (room.status === 'playing' && player.alive) {
+      forfeitPlayer(room, player);
+      clearPlayerActions(room, player);
+      if (room.gameMode === 'in_person') {
+        reconcileInPersonNightProgress(room);
+        reconcileInPersonDayProgress(room);
+      }
+    }
+    if (room.hostId === player.id) {
+      room.hostId = room.players.find((entry) => entry.connected && entry.id !== player.id)?.id
+        ?? room.players.find((entry) => entry.id !== player.id)?.id
+        ?? null;
+      room.hostGraceUntil = null;
+    }
+    if (room.gameMode === 'in_person') repairNarrator(room, true);
+    changed = true;
+  }
+
+  if (room.status === 'lobby' && room.players.length === 0) {
+    await deleteRoom(room.code);
+    return;
+  }
+  if (changed && room.status === 'playing') {
+    if (reconcileAfterRosterChange(room)) {
+      // A disconnect can change the faction balance; publish the final verdict.
+    } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
+      room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
+      startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
+    } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
+      resolveDayVoting(room, room.phase === 'tieVoting');
+    }
+  }
+
+  if (room.hostGraceUntil && now >= room.hostGraceUntil) {
+    const nextHost = room.players.find((player) => player.connected)?.id;
+    if (nextHost) room.hostId = nextHost;
+    room.hostGraceUntil = null;
+    changed = true;
+  }
+
+  if (room.status === 'playing' && room.gameMode === 'in_person' && room.phase === 'night') {
+    if (room.nightStepMinUntil && now >= room.nightStepMinUntil && reconcileInPersonNightProgress(room)) changed = true;
+    if (room.phase === 'night' && room.phaseEndsAt && now >= room.phaseEndsAt) {
+      advanceInPersonNightStep(room, { timedOut: true });
+      changed = true;
+    }
+  } else if (room.status === 'playing' && room.gameMode === 'in_person' && ['discussion', 'voting', 'tieVoting'].includes(room.phase)) {
+    if (room.phaseMinUntil && now >= room.phaseMinUntil && reconcileInPersonDayProgress(room)) changed = true;
+    if (!changed && room.phaseEndsAt && now >= room.phaseEndsAt) {
+      if (room.phase === 'discussion') beginVoting(room);
+      else if (room.phase === 'voting') resolveDayVoting(room, false);
+      else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
+      changed = true;
+    }
+  } else if (room.status === 'playing' && room.phase === 'night' && room.gameMode !== 'in_person' && extendForMafiaConflict(room, now)) {
+    changed = true;
+  } else if (room.status === 'playing' && room.phaseEndsAt && now >= room.phaseEndsAt) {
+    if (room.phase === 'night') resolveNight(room);
+    else if (room.phase === 'discussion') beginVoting(room);
+    else if (room.phase === 'voting') resolveDayVoting(room, false);
+    else if (room.phase === 'tieVoting') resolveDayVoting(room, true);
+    else if (room.phase === 'transition') completeTransition(room);
+    changed = true;
+  }
+
+  if (now - (room.lastActivityAt || room.createdAt || now) > ROOM_TTL_HOURS * 60 * 60 * 1000) {
+    await deleteRoom(room.code);
+    return;
+  }
+  if (changed) await commit(room);
+}
+
+async function refreshDatabaseHeartbeat(now = Date.now()) {
+  if (!pool || now - lastDatabaseHeartbeatAt < DATABASE_HEARTBEAT_INTERVAL_MS) return;
+  lastDatabaseHeartbeatAt = now;
+  try {
+    // Never advance the checkpoint past a room snapshot that is still waiting to be saved.
+    await flushAllRoomSaves();
+    if (pendingRoomSaves.size > 0) {
+      console.warn('Database heartbeat skipped because one or more room saves are still pending.');
+      return;
+    }
+    // updated_at acts as a lightweight server checkpoint for timer restoration after a crash/redeploy.
+    await pool.query('UPDATE hollow_rooms SET updated_at = NOW() WHERE expires_at > NOW()');
+  } catch (err) {
+    lastDatabaseHeartbeatAt = now;
+    console.error('Database heartbeat failed:', err.message);
+  }
+}
+
+const runRoomClockTick = createNonOverlappingTask(async () => {
+  const now = Date.now();
+  await runRoomBatchSafely(
+    [...rooms.values()],
+    (room) => processRoomTick(room, now),
+    quarantineRoomClock,
+  );
+  await refreshDatabaseHeartbeat(now);
+});
+
+async function tickRooms() {
+  if (shuttingDown) return;
+  return runRoomClockTick();
 }
 
 function ipAllowed(ip) {
@@ -1116,6 +1284,9 @@ function withPlayer(socket, callback, handler) {
     try {
       const context = socketPlayer(socket);
       if (!context) return reply(ack, error('Your table session has expired. Rejoin using your table code.'));
+      if (context.room.clockQuarantined && callback !== 'room:leave') {
+        return reply(ack, error('This table was paused after a technical issue. Please create a new table.'));
+      }
       const result = await handler(context.room, context.player, payload);
       reply(ack, result ?? success());
     } catch (err) {
@@ -1126,6 +1297,16 @@ function withPlayer(socket, callback, handler) {
 }
 
 io.on('connection', (socket) => {
+  // H5: an independent token bucket prevents one socket from flooding every room.
+  const consumeEventToken = createTokenBucket({ capacity: SOCKET_EVENT_BURST, refillPerSecond: SOCKET_EVENT_RATE });
+  socket.use(([eventName, ...args], next) => {
+    if (consumeEventToken()) return next();
+    const acknowledgement = args.at(-1);
+    if (typeof acknowledgement === 'function') {
+      reply(acknowledgement, error('Too many requests from this device. Please slow down.'));
+    }
+    next(new Error(`Socket event rate limit exceeded: ${String(eventName)}`));
+  });
   socket.on('room:create', async (payload = {}, ack) => {
     try {
       if (socket.data.code && socket.data.playerId) return reply(ack, error('Leave your current table before creating another.'));
@@ -1662,8 +1843,62 @@ if (isProduction) {
   app.get('/{*splat}', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
 }
 
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received. Saving active tables before shutdown.`);
+  if (roomTickTimer) clearInterval(roomTickTimer);
+
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    for (const player of room.players) {
+      if (!player.connected) continue;
+      player.connected = false;
+      player.disconnectAt = now;
+      if (room.hostId === player.id) room.hostGraceUntil = now + RECONNECT_GRACE_MS;
+      if (room.gameMode === 'in_person' && room.narratorId === player.id) room.narratorReadyId = null;
+    }
+    await saveRoom(room);
+  }
+
+  await new Promise((resolve) => io.close(resolve));
+  await flushAllRoomSaves();
+  if (pool) await pool.end();
+  console.log('Active table saves flushed. Shutdown complete.');
+}
+
+process.once('SIGTERM', () => {
+  const forceExit = setTimeout(() => {
+    console.error('Graceful shutdown exceeded 12 seconds. Forcing process exit.');
+    process.exit(1);
+  }, 12_000);
+  forceExit.unref();
+  gracefulShutdown('SIGTERM').then(() => {
+    clearTimeout(forceExit);
+    process.exitCode = 0;
+  }).catch((err) => {
+    clearTimeout(forceExit);
+    console.error('Graceful shutdown failed:', err);
+    process.exitCode = 1;
+  });
+});
+
+process.once('SIGINT', () => {
+  const forceExit = setTimeout(() => process.exit(1), 12_000);
+  forceExit.unref();
+  gracefulShutdown('SIGINT').then(() => {
+    clearTimeout(forceExit);
+    process.exitCode = 0;
+  }).catch((err) => {
+    clearTimeout(forceExit);
+    console.error('Graceful shutdown failed:', err);
+    process.exitCode = 1;
+  });
+});
+
 await initializeDatabase();
-setInterval(() => { tickRooms().catch((err) => console.error('Game clock error:', err)); }, 500);
+narratorVoicePackReadiness.refresh();
+roomTickTimer = setInterval(() => { tickRooms().catch((err) => console.error('Game clock error:', err)); }, 500);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`The Hollow Table server is listening on port ${PORT}`);
 });
