@@ -30,11 +30,11 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request).then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put('/', copy)));
-        }
-        return response;
+        if (!response.ok) return response;
+        const copy = response.clone();
+        return caches.open(CACHE_NAME)
+          .then((cache) => cache.put('/', copy))
+          .then(() => response);
       }).catch(async () => {
         const cached = await caches.match('/');
         return cached || new Response('The Hollow Table needs an internet connection to play. Reconnect to return to your table.', {
@@ -49,11 +49,11 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)));
-        }
-        return response;
+        if (!response.ok) return response;
+        const copy = response.clone();
+        return caches.open(CACHE_NAME)
+          .then((cache) => cache.put(request, copy))
+          .then(() => response);
       }))
     );
   }
