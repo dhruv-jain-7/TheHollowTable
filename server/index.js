@@ -86,12 +86,25 @@ const io = new Server(server, {
   maxHttpBufferSize: 16 * 1024,
 });
 
+const livekitConnectOrigin = (() => {
+  try { return new URL(process.env.LIVEKIT_URL || '').origin; }
+  catch { return null; }
+})();
+const socketConnectOrigins = allowedOrigins.flatMap((origin) => {
+  try {
+    const parsed = new URL(origin);
+    return [`${parsed.protocol === 'https:' ? 'wss:' : 'ws:'}//${parsed.host}`];
+  } catch {
+    return [];
+  }
+});
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       baseUri: ["'self'"],
-      connectSrc: ["'self'", 'https:', 'wss:'],
+      connectSrc: ["'self'", ...socketConnectOrigins, ...(livekitConnectOrigin ? [livekitConnectOrigin] : [])],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
