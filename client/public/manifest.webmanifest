@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "The Hollow Table",
+  "short_name": "Hollow Table",
+  "description": "A private-room social deduction horror game.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#090807",
+  "theme_color": "#090807",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icons/hollow-table.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
