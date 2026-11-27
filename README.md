@@ -140,3 +140,14 @@ In-Person mode uses one assigned narrator phone. All public narration is generat
 The current pack uses the approved single voice ID and Eleven v4 audio tags. If the API account does not allow `eleven_v4`, set `$env:HOLLOW_ELEVENLABS_MODEL = 'eleven_v3'` before running the generator, then rerun the same command. If no clip has been created yet, the generator safely switches models; if a partial pack already exists, it refuses to overwrite those files unless you explicitly run `npm run audio:generate -- --overwrite`. The generated clips are ordinary local MP3 assets; no ElevenLabs key or API call is needed during a game.
 
 Before public or commercial distribution, verify that the chosen ElevenLabs plan grants the required usage rights. The Free tier is not the commercial-licence tier; current ElevenLabs pricing lists a commercial licence with Starter and above.
+
+
+## Installable app, invitations and rematches
+
+The web app includes a Progressive Web App manifest and service worker. On supported browsers, use **INSTALL APP** when the browser offers installation, or use the browser's own **Add to Home Screen** option. The cached app shell can reopen while offline, but **gameplay is not offline**: room state, reconnects, voting, and narrator coordination still require an internet connection to the live server.
+
+Every lobby shows a QR invitation and a shareable join link. Scanning the code opens the correct Online or In-Person join screen with the table code already filled in. The link contains only the public four-character room code and game mode; it never includes a player session token.
+
+After a final verdict, the connected host can start a rematch. The server keeps only authenticated players who are still connected, resets all secret roles and game state, and requires at least five connected players before reopening the lobby. In-Person rematches require the assigned narrator to enable and test public audio again.
+
+A first-visit tutorial explains the table flow. The **HOW TO PLAY** button reopens it at any time. Device settings keep narrator volume and haptic feedback preferences locally on each device; browser support for vibration and app installation varies by device.

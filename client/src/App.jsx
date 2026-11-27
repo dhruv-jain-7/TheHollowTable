@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request, socket } from './socket.js';
-import VoiceRoom from './components/VoiceRoom.jsx';
+import ExperienceTutorial from './components/ExperienceTutorial.jsx';
 import { getNarrationCue } from './audio/narration.js';
+
+const VoiceRoom = lazy(() => import('./components/VoiceRoom.jsx'));
+const InviteTools = lazy(() => import('./components/InviteTools.jsx'));
 
 // HOLLOW_STAGE_6_NARRATOR_AUDIO: one unlocked narrator device plays the shared static voice pack.
 // HOLLOW_STAGE_8_UNDERTAKER_ROLE: private one-use inheritance and the in-game role guide.
@@ -152,18 +155,24 @@ function App() {
   const [serverOffset, setServerOffset] = useState(0);
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('raven');
-  const [joinCode, setJoinCode] = useState('');
+  const [joinCode, setJoinCode] = useState(() => (new URLSearchParams(window.location.search).get('code') || '').toUpperCase().replace(/[^A-HJ-NP-Z2-9]/g, '').slice(0, 4));
   const [maxPlayers, setMaxPlayers] = useState(10);
   const [mafiaCount, setMafiaCount] = useState(2);
   // HOLLOW_STAGE_2_MODE_SELECTION: the selected mode is saved on the server with the room.
-  const [gameMode, setGameMode] = useState('online');
+  const [gameMode, setGameMode] = useState(() => new URLSearchParams(window.location.search).get('mode') === 'in_person' ? 'in_person' : 'online');
   const [selectedTarget, setSelectedTarget] = useState('');
   const [messageText, setMessageText] = useState('');
   const [leaving, setLeaving] = useState(false);
   const [rulesOpen, setRulesOpen] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [tutorialOpen, setTutorialOpen] = useState(() => { try { return localStorage.getItem('hollow-tutorial-seen') !== 'yes'; } catch { return false; } });
+  const [hapticsEnabled, setHapticsEnabled] = useState(() => { try { return localStorage.getItem('hollow-haptics') !== 'off'; } catch { return true; } });
+  const [narratorVolume, setNarratorVolume] = useState(() => { try { const stored = localStorage.getItem('hollow-narrator-volume'); if (stored === null) return 1; const value = Number(stored); return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1; } catch { return 1; } });
+  const [installPrompt, setInstallPrompt] = useState(null);
   const chatEndRef = useRef(null);
   const lastResumeKey = useRef('');
   const lastPhaseKey = useRef('');
+  const lastHapticKey = useRef('');
   // HOLLOW_STAGE_3_IN_PERSON_LOBBY: keep the narrator's unlocked audio context alive across lobby renders.
   const narratorAudioContextRef = useRef(null);
   const narratorAudioElementRef = useRef(null);
@@ -249,6 +258,41 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return undefined;
+    navigator.serviceWorker.register('/sw.js').catch((error) => console.warn('PWA service worker registration failed:', error));
+    return undefined;
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hollow-haptics', hapticsEnabled ? 'on' : 'off');
+      localStorage.setItem('hollow-narrator-volume', String(narratorVolume));
+    } catch { /* Device preferences remain usable for this visit if storage is blocked. */ }
+    if (narratorAudioElementRef.current) narratorAudioElementRef.current.volume = narratorVolume;
+  }, [hapticsEnabled, narratorVolume]);
+
+  useEffect(() => {
+    const onInstallPrompt = (event) => { event.preventDefault(); setInstallPrompt(event); };
+    const onInstalled = () => { setInstallPrompt(null); flash('The Hollow Table has been installed on this device.'); };
+    window.addEventListener('beforeinstallprompt', onInstallPrompt);
+    window.addEventListener('appinstalled', onInstalled);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onInstallPrompt);
+      window.removeEventListener('appinstalled', onInstalled);
+    };
+  }, [flash]);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    const key = `${snapshot.status}:${snapshot.round}:${snapshot.phase}:${snapshot.nightStep || ''}:${snapshot.announcement?.id || ''}`;
+    if (lastHapticKey.current && key !== lastHapticKey.current && hapticsEnabled && typeof navigator.vibrate === 'function') {
+      const dramatic = snapshot.status === 'finished' || ['murder', 'elimination', 'victory'].includes(snapshot.announcement?.kind);
+      navigator.vibrate(dramatic ? [55, 35, 55] : 24);
+    }
+    lastHapticKey.current = key;
+  }, [snapshot?.status, snapshot?.round, snapshot?.phase, snapshot?.nightStep, snapshot?.announcement?.id, hapticsEnabled]);
+
+  useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [snapshot?.chat?.length]);
 
@@ -260,6 +304,7 @@ function App() {
     setBusy(false);
     if (!response.ok) return flash(response.error, true);
     saveSession({ code: response.code, token: response.token });
+    window.history.replaceState({}, '', window.location.pathname);
     setSnapshot(response.snapshot);
     setScreen('lobby');
   };
@@ -273,6 +318,7 @@ function App() {
     setBusy(false);
     if (!response.ok) return flash(response.error, true);
     saveSession({ code: response.code, token: response.token });
+    window.history.replaceState({}, '', window.location.pathname);
     setSnapshot(response.snapshot);
     setScreen('lobby');
   };
@@ -307,6 +353,22 @@ function App() {
     if (!response?.ok) flash(response?.error || 'Could not remove this guest.', true);
     else flash(`${player.name} was removed from the table.`);
   };
+
+  const requestRematch = async () => {
+    if (!snapshot?.me?.isHost) return;
+    setBusy(true);
+    const response = await request('game:rematch');
+    setBusy(false);
+    if (!response?.ok) flash(response?.error || 'The rematch could not begin.', true);
+    else flash('The table is gathering again. Everyone kept their seat.');
+  };
+
+  const closeTutorial = useCallback(() => {
+    setTutorialOpen(false);
+    try { localStorage.setItem('hollow-tutorial-seen', 'yes'); } catch { /* Tutorial can still be opened manually. */ }
+  }, []);
+  const closeRules = useCallback(() => setRulesOpen(false), []);
+  const closePreferences = useCallback(() => setPreferencesOpen(false), []);
 
   const leaveTable = async () => {
     if (snapshot?.status === 'playing' && !window.confirm('Leaving now counts as abandoning your seat. Your character will be removed from the living players. Continue?')) return;
@@ -378,7 +440,7 @@ function App() {
       const audio = new Audio();
       audio.preload = 'auto';
       audio.crossOrigin = 'anonymous';
-      audio.volume = 1;
+      audio.volume = narratorVolume;
       audio.addEventListener('error', () => {
         setNarrationPlaybackError('Audio could not be loaded. Check that the voice pack is complete.');
       });
@@ -493,7 +555,7 @@ function App() {
   }, [snapshot, narrationUnlocked]);
 
   useEffect(() => {
-    if (snapshot?.gameMode !== 'in_person' || snapshot?.status !== 'playing') return undefined;
+    if (snapshot?.status !== 'playing') return undefined;
     let disposed = false;
     const requestScreenWakeLock = async () => {
       if (disposed || document.visibilityState !== 'visible' || !navigator.wakeLock?.request) return;
@@ -512,7 +574,7 @@ function App() {
         return;
       }
       const currentSnapshot = latestSnapshotRef.current;
-      if (currentSnapshot?.me?.isNarrator) {
+      if (currentSnapshot?.gameMode === 'in_person' && currentSnapshot?.me?.isNarrator) {
         narrationUnlockedRef.current = false;
         setNarrationUnlocked(false);
         const missedCue = getNarrationCue(currentSnapshot);
@@ -567,11 +629,15 @@ function App() {
         </button>
         <div className="topbar-right">
           <span className="online-indicator"><i /> {socket.connected ? 'SERVER CONNECTED' : 'RECONNECTING'}</span>
+          <button className="know-roles-button" type="button" onClick={() => setTutorialOpen(true)}>HOW TO PLAY</button>
           <button className="know-roles-button" type="button" onClick={() => setRulesOpen(true)}>✦ KNOW THE ROLES</button>
+          <button className="quiet-button" type="button" onClick={() => setPreferencesOpen(true)}>SETTINGS</button>
+          {installPrompt && <button className="quiet-button" type="button" onClick={async () => { await installPrompt.prompt(); setInstallPrompt(null); }}>INSTALL APP</button>}
           {snapshot && <button className="quiet-button" onClick={leaveTable} disabled={leaving}>{leaving ? 'LEAVING…' : 'LEAVE TABLE'}</button>}
         </div>
       </header>
 
+      {!socket.connected && <div className="reconnect-banner app-connection-banner" role="status" aria-live="polite"><strong>THE CONNECTION HAS BEEN LOST</strong><span>Trying to restore your seat. Keep this tab open and stay online.</span></div>}
       {(errorMessage || notice) && <div className={`toast ${errorMessage ? 'toast-error' : 'toast-good'}`}>{errorMessage || notice}</div>}
       {snapshot?.clockQuarantined && (
         <div className="announcement announcement-red system-clock-quarantine" role="alert">
@@ -641,14 +707,17 @@ function App() {
           narrationUnlocked={narrationUnlocked}
           onEnableNarration={testNarratorSpeaker}
           narrationPlaybackError={narrationPlaybackError}
+          hapticsEnabled={hapticsEnabled}
         />
       )}
 
       {snapshot?.status === 'finished' && (
-        <EndGame snapshot={snapshot} onLeave={leaveTable} />
+        <EndGame snapshot={snapshot} onLeave={leaveTable} onRematch={requestRematch} isHost={snapshot.me.isHost} busy={busy} />
       )}
 
-      {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && <RulesModal onClose={closeRules} />}
+      {tutorialOpen && <ExperienceTutorial gameMode={snapshot?.gameMode || gameMode} onClose={closeTutorial} />}
+      {preferencesOpen && <PreferencesModal hapticsEnabled={hapticsEnabled} setHapticsEnabled={setHapticsEnabled} narratorVolume={narratorVolume} setNarratorVolume={setNarratorVolume} onClose={closePreferences} />}
 
       <footer className="site-footer">
         <span>NO ONE IS INNOCENT AFTER MIDNIGHT.</span>
@@ -659,10 +728,27 @@ function App() {
 }
 
 function RulesModal({ onClose }) {
+  const dialogRef = useRef(null);
   useEffect(() => {
-    const closeOnEscape = (event) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    const previouslyFocused = document.activeElement;
+    const dialog = dialogRef.current;
+    const getFocusable = () => [...(dialog?.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])];
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const items = getFocusable();
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
   }, [onClose]);
   const roles = [
     { role: 'mafia', rank: 'A', name: 'Mafia', side: 'THE HOUSE', text: 'Work together in secret to choose a living player to murder each night. Win when the living Mafia equal or outnumber everyone else.' },
@@ -673,7 +759,7 @@ function RulesModal({ onClose }) {
   ];
   return (
     <div className="rules-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-modal-title">
+      <section ref={dialogRef} className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-modal-title">
         <button type="button" className="rules-modal-close" onClick={onClose} aria-label="Close rules">×</button>
         <div className="eyebrow"><span /> THE HOUSE RULEBOOK <span /></div>
         <h2 id="rules-modal-title">KNOW THE <em>ROLES</em></h2>
@@ -693,6 +779,56 @@ function RulesModal({ onClose }) {
         </div>
         <div className="rules-privacy-note"><span>☾</span><p>During the game, no death announcement identifies the fallen player’s role. Private investigations and inherited identities stay on the relevant player’s own screen. The final reveal happens only after the game ends.</p></div>
         <button type="button" className="primary-button full-button rules-modal-continue" onClick={onClose}>I UNDERSTAND · RETURN TO THE HOUSE</button>
+      </section>
+    </div>
+  );
+}
+
+function PreferencesModal({ hapticsEnabled, setHapticsEnabled, narratorVolume, setNarratorVolume, onClose }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    const getFocusable = () => [...(dialog?.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]') || [])];
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const items = getFocusable();
+      if (!items.length) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previous instanceof HTMLElement) previous.focus();
+    };
+  }, []);
+  return (
+    <div className="experience-tutorial-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className="preferences-modal panel" role="dialog" aria-modal="true" aria-labelledby="preferences-title">
+        <button type="button" className="rules-modal-close" onClick={onClose} aria-label="Close settings">×</button>
+        <div className="eyebrow"><span /> DEVICE SETTINGS <span /></div>
+        <h2 id="preferences-title">MAKE THE HOUSE <em>YOURS</em></h2>
+        <label className="preference-row">
+          <span><strong>HAPTIC FEEDBACK</strong><small>Subtle vibrations for phase changes and dramatic verdicts. Supported devices only.</small></span>
+          <input type="checkbox" checked={hapticsEnabled} onChange={(event) => setHapticsEnabled(event.target.checked)} />
+        </label>
+        <label className="preference-volume">
+          <span><strong>NARRATOR VOLUME</strong><small>Adjust public voice announcements on this device only.</small></span>
+          <input type="range" min="0" max="1" step="0.05" value={narratorVolume} onChange={(event) => setNarratorVolume(Number(event.target.value))} />
+          <small>{Math.round(narratorVolume * 100)}% · DOES NOT CHANGE OTHER PLAYERS’ DEVICES</small>
+        </label>
+        <section className="install-help-panel">
+          <strong>INSTALL THE HOUSE ON YOUR DEVICE</strong>
+          <p>When your browser offers <b>INSTALL APP</b>, use it to add The Hollow Table to your home screen or app list.</p>
+          <p>On iPhone or iPad: open this page in Safari, tap <b>Share</b>, then choose <b>Add to Home Screen</b>.</p>
+          <p>On Android: open the browser menu and choose <b>Install app</b> or <b>Add to Home screen</b>. The wording depends on your browser.</p>
+          <small>Installation gives you an app-style shortcut. It does not make live games work offline.</small>
+        </section>
+        <p className="preferences-note">Preferences are saved on this device. In-Person narration still requires an explicit voice unlock after the browser returns from the background.</p>
+        <button type="button" className="primary-button full-button" onClick={onClose}>SAVE & RETURN</button>
       </section>
     </div>
   );
@@ -718,7 +854,7 @@ function AvatarPicker({ selected, onSelect }) {
 }
 
 function Landing({ name, setName, gameMode, setGameMode, avatar, setAvatar, joinCode, setJoinCode, maxPlayers, setMaxPlayers, createTable, joinTable, busy }) {
-  const [mode, setMode] = useState('create');
+  const [mode, setMode] = useState(joinCode ? 'join' : 'create');
   return (
     <section className="landing-layout">
       <div className="landing-copy">
@@ -873,6 +1009,9 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, undertakerCount, onUpdate, on
           <div className="panel-kicker">YOUR PRIVATE TABLE CODE</div>
           <div className="code-display">{snapshot.code.split('').map((letter, index) => <span key={index}>{letter}</span>)}</div>
           <button className="outline-button copy-button" onClick={onCopy}>▣ COPY INVITE CODE</button>
+          <Suspense fallback={<div className="voice-loading" role="status">PREPARING THE INVITE…</div>}>
+            <InviteTools code={snapshot.code} gameMode={snapshot.gameMode} />
+          </Suspense>
           <div className="code-footnote">Only guests with this code can enter.</div>
         </section>
         <section className="panel guest-panel">
@@ -1062,7 +1201,7 @@ function UndertakerRevealOverlay({ result }) {
   );
 }
 
-function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, actUndertaker, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady, narrationUnlocked, onEnableNarration, narrationPlaybackError }) {
+function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight, actUndertaker, vote, messageText, setMessageText, sendChat, chatEndRef, session, clock, serverOffset, onKickPlayer, onReadyToVote, onIdentityReady, narrationUnlocked, onEnableNarration, narrationPlaybackError, hapticsEnabled }) {
   const isInPerson = snapshot.gameMode === 'in_person';
   const isNight = snapshot.phase === 'night';
   const isMafiaWakeStep = ['mafia', 'mafia_clash'].includes(snapshot.nightStep);
@@ -1156,6 +1295,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   }, [snapshot.me.privateResults?.[0]?.id]);
 
   const timerUrgent = countdown != null && countdown < 60_000;
+  const disconnectedPlayers = snapshot.players.filter((player) => !player.connected && player.reconnectDeadline && player.reconnectDeadline > clock + serverOffset);
   const chatTitle = isNight ? 'THE WHISPERS' : 'THE TABLE WHISPERS';
 
   const ringPlayers = useMemo(() => snapshot.players.map((player, index) => {
@@ -1200,7 +1340,13 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
         <div><span className="room-pill">TABLE {snapshot.code}</span><span className="round-pill">ROUND {snapshot.round}</span></div>
         {!isTransition && <div className={`phase-clock ${timerUrgent ? 'urgent' : ''}`}><small>{isInPerson && isNight ? (snapshot.nightStep === 'role_reveal' ? 'IDENTITY WINDOW' : snapshot.nightStep === 'mafia_clash' ? 'FINAL MAFIA WINDOW' : ['mafia', 'angel', 'sheriff', 'undertaker'].includes(snapshot.nightStep) ? 'ACTION WINDOW' : 'THE HOUSE MOVES') : snapshot.phase === 'night' ? 'NIGHT ENDS IN' : snapshot.phase === 'discussion' ? 'DISCUSSION ENDS IN' : snapshot.phase === 'tieVoting' ? 'RECONSIDERATION ENDS IN' : 'VOTING ENDS IN'}</small><strong>{phaseTimer}</strong></div>}
       </div>
-      <div className="game-heading"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
+      <div className="game-heading" aria-live="polite" aria-atomic="true"><div className="eyebrow"><span /> {snapshot.phase === 'night' ? 'THE HOUSE HOLDS ITS BREATH' : 'THE LIVING HAVE THE FLOOR'} <span /></div><h1>{phaseTitle(snapshot)}</h1><p>{phaseDescription(snapshot)}</p></div>
+      {disconnectedPlayers.length > 0 && (
+        <div className="reconnect-banner" role="status" aria-live="polite">
+          <strong>THE HOUSE IS HOLDING THEIR SEAT</strong>
+          {disconnectedPlayers.map((player) => <span key={player.id}>{player.name} is reconnecting · {formatTime(player.reconnectDeadline - (clock + serverOffset))} remaining</span>)}
+        </div>
+      )}
 
       {isInPerson && snapshot.me.isNarrator && !narrationUnlocked && (
         <div className="narrator-unlock-banner" role="status">
@@ -1449,7 +1595,9 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
           <section className="panel chat-panel">
             <div className="panel-header"><div><div className="panel-kicker">LIVE CONVERSATION</div><h2>{chatTitle}</h2></div><span className="panel-symbol">☷</span></div>
             <div className={isNight && !identityVisible ? 'voice-concealed' : ''}>
-              <VoiceRoom code={snapshot.code} token={session?.token} phase={snapshot.phase} round={snapshot.round} enabled={voiceEnabled} />
+              <Suspense fallback={<div className="voice-loading" role="status">PREPARING PRIVATE VOICE…</div>}>
+                <VoiceRoom code={snapshot.code} token={session?.token} phase={snapshot.phase} round={snapshot.round} enabled={voiceEnabled} />
+              </Suspense>
             </div>
             <div className="chat-log">
               {snapshot.chat.length === 0 && <div className="chat-empty">The walls are listening. Be the first to speak.</div>}
@@ -1474,7 +1622,7 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
   );
 }
 
-function EndGame({ snapshot, onLeave }) {
+function EndGame({ snapshot, onLeave, onRematch, isHost, busy }) {
   const winningPlayers = snapshot.players.filter((player) => snapshot.winner === 'mafia' ? player.role === 'mafia' : player.role !== 'mafia');
   const winnerLabel = snapshot.winner === 'mafia' ? 'THE MAFIA WIN' : 'THE TOWN WINS';
   return (
@@ -1526,7 +1674,12 @@ function EndGame({ snapshot, onLeave }) {
           ))}
         </div>
       </section>
-      <button className="primary-button end-button" onClick={onLeave}>RETURN TO THE ENTRANCE <span>↗</span></button>
+      {isHost ? (
+        <button className="primary-button end-button" onClick={onRematch} disabled={busy}>{busy ? 'GATHERING THE TABLE…' : 'PLAY AGAIN WITH THIS TABLE'} <span>↗</span></button>
+      ) : (
+        <p className="rematch-waiting" role="status">The host can reopen this table for a rematch. Your seat remains available while you stay connected.</p>
+      )}
+      <button className="outline-button end-button-secondary" onClick={onLeave}>RETURN TO THE ENTRANCE</button>
     </section>
   );
 }

@@ -1156,3 +1156,76 @@ h1, h2, h3, p { margin-top: 0; }
 .narrator-paused-banner strong { color: #f0c2b0; font: 800 10px var(--mono); letter-spacing: .14em; }
 .narrator-paused-banner span { color: rgba(239, 222, 207, .78); font-size: 12px; line-height: 1.55; }
 @media (max-width: 620px) { .narrator-paused-banner { padding: 12px 13px; } .narrator-paused-banner span { font-size: 11px; } }
+
+
+/* Stage 4 + Stage 6 experience features */
+.topbar-right { flex-wrap: wrap; }
+.invite-tools { display: grid; grid-template-columns: 148px minmax(0, 1fr); align-items: center; gap: 18px; width: 100%; margin-top: 20px; padding: 17px; border: 1px solid rgba(183,145,92,.2); background: rgba(3,3,4,.34); }
+.invite-qr-frame { display: grid; place-items: center; min-height: 148px; padding: 7px; border: 1px solid rgba(183,145,92,.22); background: #ead8b7; }
+.invite-qr-frame img { display: block; width: 100%; max-width: 132px; height: auto; image-rendering: pixelated; }
+.invite-qr-frame span { color: #9b896f; font: 8px var(--mono); letter-spacing: .12em; text-align: center; }
+.invite-tools-copy { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 8px; }
+.invite-tools-copy > strong { color: #d7bd94; font: 10px var(--gothic); letter-spacing: .12em; }
+.invite-tools-copy > span { color: #96887a; font: 12px/1.5 'IM Fell English', Georgia, serif; }
+.invite-tools-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 4px; }
+.invite-tools-actions .outline-button { padding: 9px 10px; font-size: 8px; }
+.invite-tools-status { min-height: 12px; color: #a98d64; font: 8px/1.5 var(--mono); letter-spacing: .04em; }
+.experience-tutorial-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; place-items: center; overflow-y: auto; padding: 22px; background: rgba(3,2,3,.88); backdrop-filter: blur(11px); }
+.experience-tutorial, .preferences-modal { position: relative; width: min(640px, 100%); padding: clamp(26px, 5vw, 46px); border-color: rgba(183,145,92,.4); background: radial-gradient(ellipse at 85% 0, rgba(117,31,37,.2), transparent 48%), linear-gradient(145deg, #1b1513, #0b0909); box-shadow: 0 28px 110px rgba(0,0,0,.7); }
+.experience-tutorial > .eyebrow, .preferences-modal > .eyebrow { justify-content: center; }
+.tutorial-mode { margin: 15px 0 25px; color: #ae8c61; font: 9px var(--mono); letter-spacing: .19em; text-align: center; }
+.tutorial-progress { display: flex; gap: 7px; margin: 0 0 30px; }
+.tutorial-progress span { flex: 1; height: 3px; background: rgba(179,145,97,.2); }
+.tutorial-progress span.active { background: #a44a43; box-shadow: 0 0 12px rgba(164,74,67,.5); }
+.tutorial-step-label { display: block; color: #aa815a; font: 9px var(--mono); letter-spacing: .16em; }
+.experience-tutorial h2, .preferences-modal h2 { margin: 12px 0 14px; color: #f0e2d0; font: 500 clamp(28px, 5vw, 42px)/1.15 var(--gothic); text-align: center; }
+.experience-tutorial h2 { text-align: left; }
+.tutorial-body { min-height: 92px; margin: 0; color: #c6b8a8; font: 18px/1.65 'IM Fell English', Georgia, serif; }
+.tutorial-note { display: flex; gap: 12px; margin: 21px 0 25px; padding: 15px 17px; border: 1px solid rgba(183,145,92,.2); background: rgba(5,4,4,.38); color: #ae9a82; font: 10px/1.7 var(--mono); }
+.tutorial-note span { color: #b68b58; }
+.tutorial-actions { display: flex; justify-content: space-between; gap: 12px; }
+.tutorial-actions .primary-button { min-width: 190px; }
+.tutorial-skip { display: block; margin: 18px auto 0; padding: 8px; border: 0; background: none; color: #72665b; font: 8px var(--mono); letter-spacing: .14em; }
+.preferences-modal h2 { margin-bottom: 26px; }
+.preference-row, .preference-volume { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 0; border-bottom: 1px solid rgba(183,145,92,.16); }
+.preference-row > span, .preference-volume > span { display: flex; flex-direction: column; gap: 5px; }
+.preference-row strong, .preference-volume strong { color: #d7bd94; font: 10px var(--gothic); letter-spacing: .1em; }
+.preference-row small, .preference-volume small { color: #928477; font: 11px/1.5 var(--mono); }
+.preference-row input { width: 21px; height: 21px; accent-color: #9a5144; }
+.preference-volume { flex-direction: column; align-items: stretch; }
+.preference-volume input { width: 100%; accent-color: #9a5144; }
+.preference-volume > small { text-align: right; }
+.preferences-note { margin: 20px 0; color: #897b70; font: 10px/1.7 var(--mono); }
+.reconnect-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 18px; margin: 0 auto 18px; padding: 13px 17px; border: 1px solid rgba(173,126,77,.34); background: rgba(31,22,16,.86); color: #b9a184; }
+.reconnect-banner strong { color: #d1ae7d; font: 9px var(--mono); letter-spacing: .13em; }
+.reconnect-banner span { color: #a99b8a; font: 10px var(--mono); }
+.voice-loading { padding: 16px; color: #94836e; font: 9px var(--mono); letter-spacing: .1em; }
+.rematch-waiting { max-width: 560px; margin: 26px auto 12px; color: #ac9b88; font: 12px/1.7 var(--mono); text-align: center; }
+.end-button-secondary { display: block; margin: 14px auto 0; }
+@media (max-width: 760px) {
+  .topbar { height: auto; min-height: 72px; align-items: flex-start; gap: 12px; padding: 15px 0; }
+  .topbar-right { justify-content: flex-end; gap: 8px; }
+  .topbar-right .online-indicator { display: none; }
+  .topbar-right .know-roles-button, .topbar-right .quiet-button { padding: 8px 9px; font-size: 7px; }
+  .invite-tools { grid-template-columns: 112px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .invite-qr-frame { min-height: 112px; }
+  .invite-qr-frame img { max-width: 98px; }
+  .experience-tutorial-backdrop { align-items: start; }
+  .tutorial-body { min-height: 0; font-size: 16px; }
+}
+@media (max-width: 420px) {
+  .invite-tools { grid-template-columns: 1fr; }
+  .invite-qr-frame { width: 150px; margin: 0 auto; }
+  .invite-qr-frame img { max-width: 132px; }
+  .tutorial-actions .primary-button { min-width: 0; flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .experience-tutorial-backdrop, .reconnect-banner { animation: none !important; transition: none !important; }
+}
+
+
+.install-help-panel { margin: 20px 0; padding: 16px 18px; border: 1px solid rgba(183,145,92,.2); background: rgba(5,4,4,.42); }
+.install-help-panel > strong { color: #d7bd94; font: 10px var(--gothic); letter-spacing: .12em; }
+.install-help-panel p { margin: 10px 0; color: #b8aa9a; font: 11px/1.7 var(--mono); }
+.install-help-panel p b { color: #e1c99f; }
+.install-help-panel > small { display: block; margin-top: 13px; color: #8b7a69; font: 9px/1.65 var(--mono); }

@@ -53,6 +53,7 @@ import {
   shiftRestoredRoomTimers,
   reconcileNarratorClockPause,
 } from './runtimeSafety.js';
+import { prepareRoomRematch } from './rematchRules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3001);
@@ -85,8 +86,37 @@ const io = new Server(server, {
   maxHttpBufferSize: 16 * 1024,
 });
 
+const livekitConnectOrigin = (() => {
+  try { return new URL(process.env.LIVEKIT_URL || '').origin; }
+  catch { return null; }
+})();
+const socketConnectOrigins = allowedOrigins.flatMap((origin) => {
+  try {
+    const parsed = new URL(origin);
+    return [`${parsed.protocol === 'https:' ? 'wss:' : 'ws:'}//${parsed.host}`];
+  } catch {
+    return [];
+  }
+});
+
 app.use(helmet({
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      baseUri: ["'self'"],
+      connectSrc: ["'self'", ...socketConnectOrigins, ...(livekitConnectOrigin ? [livekitConnectOrigin] : [])],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      mediaSrc: ["'self'", 'blob:'],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'"],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      workerSrc: ["'self'", 'blob:'],
+    },
+  },
   crossOriginEmbedderPolicy: false,
 }));
 app.use(express.json({ limit: '32kb' }));
@@ -456,6 +486,7 @@ function makeSnapshot(room, playerId) {
       avatar: player.avatar,
       alive: player.alive,
       connected: player.connected,
+      reconnectDeadline: !player.connected && player.disconnectAt ? player.disconnectAt + RECONNECT_GRACE_MS : null,
       isHost: player.id === room.hostId,
       isNarrator: room.gameMode === 'in_person' && player.id === (room.narratorId || room.hostId),
       role: revealAll ? player.role : null,
@@ -613,6 +644,21 @@ async function flushAllRoomSaves() {
 }
 
 async function deleteRoom(code) {
+  const room = rooms.get(code);
+  if (room) {
+    for (const player of room.players) {
+      const socketId = socketByPlayer.get(player.id);
+      const activeSocket = socketId ? io.sockets.sockets.get(socketId) : null;
+      if (activeSocket?.rooms.has(`table:${code}`)) activeSocket.leave(`table:${code}`);
+      if (activeSocket?.data?.code === code) {
+        activeSocket.data.code = null;
+        activeSocket.data.playerId = null;
+        activeSocket.emit('session:kicked', { reason: 'This table has expired. Return to the entrance to join or create another table.' });
+      }
+      socketByPlayer.delete(player.id);
+      chatAttempts.delete(player.id);
+    }
+  }
   rooms.delete(code);
   const entry = pendingRoomSaves.get(code);
   if (entry) {
@@ -649,6 +695,7 @@ async function initializeDatabase() {
   for (const row of rows) {
     const room = migrateRoomState(row.state);
     if (!room || !room.code || !Array.isArray(room.players)) continue;
+    room.matchId ??= randomUUID();
     const restoredAt = Date.now();
     const downtimeMs = shiftRestoredRoomTimers(room, row.updated_at, restoredAt);
     if (downtimeMs > 0) {
@@ -1013,7 +1060,7 @@ function removeEliminatedPlayerFromVoice(room, player) {
       livekitRoomService = new RoomServiceClient(httpUrl, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
     }
     const mode = room.phase === 'night' ? 'night' : 'day';
-    const voiceRoom = `hollow-${room.code}-${mode}-${room.round}`;
+    const voiceRoom = `hollow-${room.code}-${room.matchId || 'legacy'}-${mode}-${room.round}`;
     livekitRoomService.removeParticipant(voiceRoom, player.id, { revokeTokenTs: BigInt(Math.floor(Date.now() / 1000)) })
       .catch((err) => console.warn('LiveKit participant removal:', err.message));
   } catch (err) {
@@ -1319,6 +1366,18 @@ function chatAllowed(playerId) {
   return true;
 }
 
+// Expired limiter buckets are no longer useful; prune them without changing thresholds.
+function pruneTransientState(now = Date.now()) {
+  for (const [ip, entry] of joinAttempts) {
+    if (!entry || now > entry.resetAt) joinAttempts.delete(ip);
+  }
+  for (const [playerId, entries] of chatAttempts) {
+    const recent = entries.filter((time) => now - time < 5000);
+    if (recent.length) chatAttempts.set(playerId, recent);
+    else chatAttempts.delete(playerId);
+  }
+}
+
 function socketPlayer(socket) {
   const room = rooms.get(socket.data.code);
   const player = room ? playerById(room, socket.data.playerId) : null;
@@ -1377,6 +1436,7 @@ io.on('connection', (socket) => {
         schemaVersion: ROOM_SCHEMA_VERSION,
         narratorPausedAt: null,
         code,
+        matchId: randomUUID(),
         gameMode,
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
@@ -1448,6 +1508,7 @@ io.on('connection', (socket) => {
 
   socket.on('room:resume', async (payload = {}, ack) => {
     try {
+      if (socket.data.code || socket.data.playerId) return reply(ack, error('Leave your current table before restoring another seat.'));
       const code = String(payload.code || '').trim().toUpperCase();
       const token = String(payload.token || '');
       const room = rooms.get(code);
@@ -1739,6 +1800,31 @@ io.on('connection', (socket) => {
     return success({ submitted: true, resolved: room.phase !== (tieBreak ? 'tieVoting' : 'voting') });
   }));
 
+  socket.on('game:rematch', withPlayer(socket, 'game:rematch', async (room, host) => {
+    if (room.status !== 'finished') return error('A rematch is available only after the final verdict.');
+    if (room.hostId !== host.id) return error('Only the host can begin a rematch.');
+    const previousPlayers = [...room.players];
+    const connectedIds = previousPlayers
+      .filter((player) => player.connected && socketByPlayer.has(player.id))
+      .filter((player) => io.sockets.sockets.has(socketByPlayer.get(player.id)))
+      .map((player) => player.id);
+    const result = prepareRoomRematch(room, connectedIds, { freshActions, makeAnnouncement });
+    if (!result.ok) {
+      if (result.reason === 'not-enough-players') return error(`A rematch needs at least five connected players. Only ${result.available} are still here.`);
+      return error('This table is not ready for a rematch.');
+    }
+    room.matchId = randomUUID();
+    const retainedIds = new Set(room.players.map((player) => player.id));
+    for (const player of previousPlayers) {
+      if (!retainedIds.has(player.id)) {
+        socketByPlayer.delete(player.id);
+        chatAttempts.delete(player.id);
+      }
+    }
+    await commit(room);
+    return success({ retainedCount: result.retainedCount });
+  }));
+
   socket.on('room:kick', withPlayer(socket, 'room:kick', async (room, host, payload) => {
     if (room.hostId !== host.id) return error('Only the host can remove a guest.');
     if (room.status === 'finished') return error('The game has already finished.');
@@ -1893,13 +1979,22 @@ app.post('/api/voice-token', async (req, res) => {
     const allowedPhase = ['discussion', 'voting', 'tieVoting'].includes(room.phase)
       || (room.phase === 'night' && player.role === 'mafia' && roleIsActive(player, room));
     if (!allowedPhase) return res.status(403).json({ error: 'Voice chat is closed during this phase.' });
-    const voiceRoom = room.phase === 'night' ? `hollow-${room.code}-night-${room.round}` : `hollow-${room.code}-day-${room.round}`;
+    const voiceRoom = room.phase === 'night'
+      ? `hollow-${room.code}-${room.matchId || 'legacy'}-night-${room.round}`
+      : `hollow-${room.code}-${room.matchId || 'legacy'}-day-${room.round}`;
     const accessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
       identity: player.id,
       name: player.name,
       ttl: '15m',
     });
-    accessToken.addGrant({ roomJoin: true, room: voiceRoom, canPublish: true, canSubscribe: true });
+    accessToken.addGrant({
+      roomJoin: true,
+      room: voiceRoom,
+      canPublish: true,
+      canPublishSources: ['microphone'],
+      canPublishData: false,
+      canSubscribe: true,
+    });
     const jwt = await accessToken.toJwt();
     res.json({ token: jwt, serverUrl: process.env.LIVEKIT_URL, room: voiceRoom });
   } catch (err) {
@@ -1908,9 +2003,21 @@ app.post('/api/voice-token', async (req, res) => {
   }
 });
 
+// API misses return JSON, never the React application shell.
+app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
+
 if (isProduction) {
   const distPath = path.resolve(__dirname, '../client/dist');
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    etag: true,
+    setHeaders(res, filePath) {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache');
+      }
+    },
+  }));
   app.get('/{*splat}', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
 }
 
@@ -1972,6 +2079,8 @@ process.once('SIGINT', () => {
 await initializeDatabase();
 narratorVoicePackReadiness.refresh();
 roomTickTimer = setInterval(() => { tickRooms().catch((err) => console.error('Game clock error:', err)); }, 500);
+const transientStatePruner = setInterval(() => pruneTransientState(), 60_000);
+transientStatePruner.unref?.();
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`The Hollow Table server is listening on port ${PORT}`);
 });

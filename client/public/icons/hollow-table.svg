@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="104" fill="#090807"/>
+  <rect x="24" y="24" width="464" height="464" rx="88" fill="#17100f" stroke="#b89561" stroke-width="8"/>
+  <circle cx="256" cy="244" r="146" fill="none" stroke="#6f272b" stroke-width="8"/>
+  <circle cx="256" cy="244" r="112" fill="none" stroke="#b89561" stroke-width="3" opacity=".7"/>
+  <path d="M256 98 280 210 390 244 280 278 256 390 232 278 122 244 232 210Z" fill="#b89561"/>
+  <circle cx="256" cy="244" r="28" fill="#090807"/>
+  <path d="M182 390h148" stroke="#b89561" stroke-width="8" stroke-linecap="round"/>
+  <text x="256" y="438" text-anchor="middle" fill="#ead8b7" font-family="Georgia,serif" font-size="28" letter-spacing="5">HOLLOW</text>
+</svg>
