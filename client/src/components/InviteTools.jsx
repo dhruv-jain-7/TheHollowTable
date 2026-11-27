@@ -17,7 +17,7 @@ export default function InviteTools({ code, gameMode }) {
       errorCorrectionLevel: 'M',
       margin: 2,
       width: 260,
-      color: { dark: '#ead8b7', light: '#100d0c' },
+      color: { dark: '#150f0d', light: '#ead8b7' },
     }).then((dataUrl) => {
       if (active) setQrDataUrl(dataUrl);
     }).catch(() => {
