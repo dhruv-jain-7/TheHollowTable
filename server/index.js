@@ -636,6 +636,7 @@ async function deleteRoom(code) {
     for (const player of room.players) {
       const socketId = socketByPlayer.get(player.id);
       const activeSocket = socketId ? io.sockets.sockets.get(socketId) : null;
+      if (activeSocket?.rooms.has(`table:${code}`)) activeSocket.leave(`table:${code}`);
       if (activeSocket?.data?.code === code) {
         activeSocket.data.code = null;
         activeSocket.data.playerId = null;
