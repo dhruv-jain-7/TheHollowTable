@@ -11,6 +11,7 @@ function fixture(mode = 'online') {
   }));
   return {
     status: 'finished', gameMode: mode, players, hostId: 'p1', narratorId: mode === 'in_person' ? 'p2' : null,
+    settings: { maxPlayers: 10, mafiaCount: 4, undertakerCount: 1 },
     narratorReadyId: 'p2', narratorPausedAt: 10, round: 4, phase: 'finished',
     phaseEndsAt: 20, phaseMinUntil: 10, nightStep: 'sheriff', nightStepMinUntil: 11,
     nightCue: { id: 'cue' }, identityReady: { p1: true }, actions: { dayVotes: { p1: 'p2' } },
@@ -84,3 +85,13 @@ test('rematch elects an available host and narrator if the prior seats are gone'
   assert.equal(room.hostId, 'p3');
   assert.equal(room.narratorId, 'p3');
 });
+
+test('rematch clamps Mafia count when fewer players remain than the original roster', () => {
+  const room = fixture();
+  room.players = room.players.slice(0, 5);
+  const result = prepareRoomRematch(room, room.players.map((player) => player.id), helpers);
+  assert.equal(result.ok, true);
+  assert.equal(room.settings.mafiaCount, 2);
+  assert.equal(room.settings.maxPlayers, 10);
+});
+
