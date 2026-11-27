@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request, socket } from './socket.js';
 const VoiceRoom = lazy(() => import('./components/VoiceRoom.jsx'));
+const InviteTools = lazy(() => import('./components/InviteTools.jsx'));
 import ExperienceTutorial from './components/ExperienceTutorial.jsx';
-import InviteTools from './components/InviteTools.jsx';
 import { getNarrationCue } from './audio/narration.js';
 
 // HOLLOW_STAGE_6_NARRATOR_AUDIO: one unlocked narrator device plays the shared static voice pack.
@@ -989,7 +989,9 @@ function Lobby({ snapshot, maxPlayers, mafiaCount, undertakerCount, onUpdate, on
           <div className="panel-kicker">YOUR PRIVATE TABLE CODE</div>
           <div className="code-display">{snapshot.code.split('').map((letter, index) => <span key={index}>{letter}</span>)}</div>
           <button className="outline-button copy-button" onClick={onCopy}>▣ COPY INVITE CODE</button>
-          <InviteTools code={snapshot.code} gameMode={snapshot.gameMode} />
+          <Suspense fallback={<div className="voice-loading" role="status">PREPARING THE INVITE…</div>}>
+            <InviteTools code={snapshot.code} gameMode={snapshot.gameMode} />
+          </Suspense>
           <div className="code-footnote">Only guests with this code can enter.</div>
         </section>
         <section className="panel guest-panel">
