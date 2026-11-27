@@ -820,6 +820,13 @@ function PreferencesModal({ hapticsEnabled, setHapticsEnabled, narratorVolume, s
           <input type="range" min="0" max="1" step="0.05" value={narratorVolume} onChange={(event) => setNarratorVolume(Number(event.target.value))} />
           <small>{Math.round(narratorVolume * 100)}% · DOES NOT CHANGE OTHER PLAYERS’ DEVICES</small>
         </label>
+        <section className="install-help-panel">
+          <strong>INSTALL THE HOUSE ON YOUR DEVICE</strong>
+          <p>When your browser offers <b>INSTALL APP</b>, use it to add The Hollow Table to your home screen or app list.</p>
+          <p>On iPhone or iPad: open this page in Safari, tap <b>Share</b>, then choose <b>Add to Home Screen</b>.</p>
+          <p>On Android: open the browser menu and choose <b>Install app</b> or <b>Add to Home screen</b>. The wording depends on your browser.</p>
+          <small>Installation gives you an app-style shortcut. It does not make live games work offline.</small>
+        </section>
         <p className="preferences-note">Preferences are saved on this device. In-Person narration still requires an explicit voice unlock after the browser returns from the background.</p>
         <button type="button" className="primary-button full-button" onClick={onClose}>SAVE & RETURN</button>
       </section>
