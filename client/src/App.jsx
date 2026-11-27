@@ -363,10 +363,12 @@ function App() {
     else flash('The table is gathering again. Everyone kept their seat.');
   };
 
-  const closeTutorial = () => {
+  const closeTutorial = useCallback(() => {
     setTutorialOpen(false);
     try { localStorage.setItem('hollow-tutorial-seen', 'yes'); } catch { /* Tutorial can still be opened manually. */ }
-  };
+  }, []);
+  const closeRules = useCallback(() => setRulesOpen(false), []);
+  const closePreferences = useCallback(() => setPreferencesOpen(false), []);
 
   const leaveTable = async () => {
     if (snapshot?.status === 'playing' && !window.confirm('Leaving now counts as abandoning your seat. Your character will be removed from the living players. Continue?')) return;
@@ -713,9 +715,9 @@ function App() {
         <EndGame snapshot={snapshot} onLeave={leaveTable} onRematch={requestRematch} isHost={snapshot.me.isHost} busy={busy} />
       )}
 
-      {rulesOpen && <RulesModal onClose={() => setRulesOpen(false)} />}
+      {rulesOpen && <RulesModal onClose={closeRules} />}
       {tutorialOpen && <ExperienceTutorial gameMode={snapshot?.gameMode || gameMode} onClose={closeTutorial} />}
-      {preferencesOpen && <PreferencesModal hapticsEnabled={hapticsEnabled} setHapticsEnabled={setHapticsEnabled} narratorVolume={narratorVolume} setNarratorVolume={setNarratorVolume} onClose={() => setPreferencesOpen(false)} />}
+      {preferencesOpen && <PreferencesModal hapticsEnabled={hapticsEnabled} setHapticsEnabled={setHapticsEnabled} narratorVolume={narratorVolume} setNarratorVolume={setNarratorVolume} onClose={closePreferences} />}
 
       <footer className="site-footer">
         <span>NO ONE IS INNOCENT AFTER MIDNIGHT.</span>
@@ -786,14 +788,23 @@ function PreferencesModal({ hapticsEnabled, setHapticsEnabled, narratorVolume, s
   const dialogRef = useRef(null);
   useEffect(() => {
     const previous = document.activeElement;
-    dialogRef.current?.querySelector('button')?.focus();
-    const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); };
+    const dialog = dialogRef.current;
+    const getFocusable = () => [...(dialog?.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex]') || [])];
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const items = getFocusable();
+      if (!items.length) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
+    };
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       if (previous instanceof HTMLElement) previous.focus();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="experience-tutorial-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section ref={dialogRef} className="preferences-modal panel" role="dialog" aria-modal="true" aria-labelledby="preferences-title">
