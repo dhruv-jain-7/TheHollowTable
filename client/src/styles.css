@@ -1161,7 +1161,7 @@ h1, h2, h3, p { margin-top: 0; }
 /* Stage 4 + Stage 6 experience features */
 .topbar-right { flex-wrap: wrap; }
 .invite-tools { display: grid; grid-template-columns: 148px minmax(0, 1fr); align-items: center; gap: 18px; width: 100%; margin-top: 20px; padding: 17px; border: 1px solid rgba(183,145,92,.2); background: rgba(3,3,4,.34); }
-.invite-qr-frame { display: grid; place-items: center; min-height: 148px; padding: 7px; border: 1px solid rgba(183,145,92,.22); background: #100d0c; }
+.invite-qr-frame { display: grid; place-items: center; min-height: 148px; padding: 7px; border: 1px solid rgba(183,145,92,.22); background: #ead8b7; }
 .invite-qr-frame img { display: block; width: 100%; max-width: 132px; height: auto; image-rendering: pixelated; }
 .invite-qr-frame span { color: #9b896f; font: 8px var(--mono); letter-spacing: .12em; text-align: center; }
 .invite-tools-copy { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 8px; }
