@@ -27,6 +27,12 @@ export function prepareRoomRematch(room, connectedPlayerIds, { now = Date.now(),
     player.roleActiveFromRound = 1;
   }
 
+  // A late-game table may have fewer players than its original configured size.
+  // Keep the rematch immediately startable by clamping Mafia to the current roster.
+  const mafiaCap = Math.max(1, Math.floor((retained.length - 1) / 2));
+  room.settings.mafiaCount = Math.min(Math.max(1, Number(room.settings.mafiaCount) || 1), mafiaCap);
+  room.settings.maxPlayers = Math.max(retained.length, Math.min(16, Number(room.settings.maxPlayers) || retained.length));
+
   room.hostId = retained.some((player) => player.id === previousHostId)
     ? previousHostId
     : retained[0].id;
