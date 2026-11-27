@@ -553,7 +553,7 @@ function App() {
   }, [snapshot, narrationUnlocked]);
 
   useEffect(() => {
-    if (snapshot?.gameMode !== 'in_person' || snapshot?.status !== 'playing') return undefined;
+    if (snapshot?.status !== 'playing') return undefined;
     let disposed = false;
     const requestScreenWakeLock = async () => {
       if (disposed || document.visibilityState !== 'visible' || !navigator.wakeLock?.request) return;
@@ -572,7 +572,7 @@ function App() {
         return;
       }
       const currentSnapshot = latestSnapshotRef.current;
-      if (currentSnapshot?.me?.isNarrator) {
+      if (currentSnapshot?.gameMode === 'in_person' && currentSnapshot?.me?.isNarrator) {
         narrationUnlockedRef.current = false;
         setNarrationUnlocked(false);
         const missedCue = getNarrationCue(currentSnapshot);
@@ -635,6 +635,7 @@ function App() {
         </div>
       </header>
 
+      {!socket.connected && <div className="reconnect-banner app-connection-banner" role="status" aria-live="polite"><strong>THE CONNECTION HAS BEEN LOST</strong><span>Trying to restore your seat. Keep this tab open and stay online.</span></div>}
       {(errorMessage || notice) && <div className={`toast ${errorMessage ? 'toast-error' : 'toast-good'}`}>{errorMessage || notice}</div>}
       {snapshot?.clockQuarantined && (
         <div className="announcement announcement-red system-clock-quarantine" role="alert">
