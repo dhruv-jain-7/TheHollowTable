@@ -634,6 +634,13 @@ async function deleteRoom(code) {
   const room = rooms.get(code);
   if (room) {
     for (const player of room.players) {
+      const socketId = socketByPlayer.get(player.id);
+      const activeSocket = socketId ? io.sockets.sockets.get(socketId) : null;
+      if (activeSocket?.data?.code === code) {
+        activeSocket.data.code = null;
+        activeSocket.data.playerId = null;
+        activeSocket.emit('session:kicked', { reason: 'This table has expired. Return to the entrance to join or create another table.' });
+      }
       socketByPlayer.delete(player.id);
       chatAttempts.delete(player.id);
     }
@@ -1347,7 +1354,7 @@ function chatAllowed(playerId) {
 // Expired limiter buckets are no longer useful; prune them without changing thresholds.
 function pruneTransientState(now = Date.now()) {
   for (const [ip, entry] of joinAttempts) {
-    if (!entry || now >= entry.resetAt) joinAttempts.delete(ip);
+    if (!entry || now > entry.resetAt) joinAttempts.delete(ip);
   }
   for (const [playerId, entries] of chatAttempts) {
     const recent = entries.filter((time) => now - time < 5000);
