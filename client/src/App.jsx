@@ -724,10 +724,27 @@ function App() {
 }
 
 function RulesModal({ onClose }) {
+  const dialogRef = useRef(null);
   useEffect(() => {
-    const closeOnEscape = (event) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    const previouslyFocused = document.activeElement;
+    const dialog = dialogRef.current;
+    const getFocusable = () => [...(dialog?.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])];
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') { onClose(); return; }
+      if (event.key !== 'Tab') return;
+      const items = getFocusable();
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
+    };
   }, [onClose]);
   const roles = [
     { role: 'mafia', rank: 'A', name: 'Mafia', side: 'THE HOUSE', text: 'Work together in secret to choose a living player to murder each night. Win when the living Mafia equal or outnumber everyone else.' },
@@ -738,7 +755,7 @@ function RulesModal({ onClose }) {
   ];
   return (
     <div className="rules-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-modal-title">
+      <section ref={dialogRef} className="rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-modal-title">
         <button type="button" className="rules-modal-close" onClick={onClose} aria-label="Close rules">×</button>
         <div className="eyebrow"><span /> THE HOUSE RULEBOOK <span /></div>
         <h2 id="rules-modal-title">KNOW THE <em>ROLES</em></h2>
@@ -758,6 +775,40 @@ function RulesModal({ onClose }) {
         </div>
         <div className="rules-privacy-note"><span>☾</span><p>During the game, no death announcement identifies the fallen player’s role. Private investigations and inherited identities stay on the relevant player’s own screen. The final reveal happens only after the game ends.</p></div>
         <button type="button" className="primary-button full-button rules-modal-continue" onClick={onClose}>I UNDERSTAND · RETURN TO THE HOUSE</button>
+      </section>
+    </div>
+  );
+}
+
+function PreferencesModal({ hapticsEnabled, setHapticsEnabled, narratorVolume, setNarratorVolume, onClose }) {
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    dialogRef.current?.querySelector('button')?.focus();
+    const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (previous instanceof HTMLElement) previous.focus();
+    };
+  }, [onClose]);
+  return (
+    <div className="experience-tutorial-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className="preferences-modal panel" role="dialog" aria-modal="true" aria-labelledby="preferences-title">
+        <button type="button" className="rules-modal-close" onClick={onClose} aria-label="Close settings">×</button>
+        <div className="eyebrow"><span /> DEVICE SETTINGS <span /></div>
+        <h2 id="preferences-title">MAKE THE HOUSE <em>YOURS</em></h2>
+        <label className="preference-row">
+          <span><strong>HAPTIC FEEDBACK</strong><small>Subtle vibrations for phase changes and dramatic verdicts. Supported devices only.</small></span>
+          <input type="checkbox" checked={hapticsEnabled} onChange={(event) => setHapticsEnabled(event.target.checked)} />
+        </label>
+        <label className="preference-volume">
+          <span><strong>NARRATOR VOLUME</strong><small>Adjust public voice announcements on this device only.</small></span>
+          <input type="range" min="0" max="1" step="0.05" value={narratorVolume} onChange={(event) => setNarratorVolume(Number(event.target.value))} />
+          <small>{Math.round(narratorVolume * 100)}% · DOES NOT CHANGE OTHER PLAYERS’ DEVICES</small>
+        </label>
+        <p className="preferences-note">Preferences are saved on this device. In-Person narration still requires an explicit voice unlock after the browser returns from the background.</p>
+        <button type="button" className="primary-button full-button" onClick={onClose}>SAVE & RETURN</button>
       </section>
     </div>
   );
