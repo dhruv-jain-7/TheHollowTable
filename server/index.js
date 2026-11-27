@@ -681,6 +681,7 @@ async function initializeDatabase() {
   for (const row of rows) {
     const room = migrateRoomState(row.state);
     if (!room || !room.code || !Array.isArray(room.players)) continue;
+    room.matchId ??= randomUUID();
     const restoredAt = Date.now();
     const downtimeMs = shiftRestoredRoomTimers(room, row.updated_at, restoredAt);
     if (downtimeMs > 0) {
@@ -1045,7 +1046,7 @@ function removeEliminatedPlayerFromVoice(room, player) {
       livekitRoomService = new RoomServiceClient(httpUrl, process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET);
     }
     const mode = room.phase === 'night' ? 'night' : 'day';
-    const voiceRoom = `hollow-${room.code}-${mode}-${room.round}`;
+    const voiceRoom = `hollow-${room.code}-${room.matchId || 'legacy'}-${mode}-${room.round}`;
     livekitRoomService.removeParticipant(voiceRoom, player.id, { revokeTokenTs: BigInt(Math.floor(Date.now() / 1000)) })
       .catch((err) => console.warn('LiveKit participant removal:', err.message));
   } catch (err) {
@@ -1421,6 +1422,7 @@ io.on('connection', (socket) => {
         schemaVersion: ROOM_SCHEMA_VERSION,
         narratorPausedAt: null,
         code,
+        matchId: randomUUID(),
         gameMode,
         createdAt: Date.now(),
         lastActivityAt: Date.now(),
@@ -1797,6 +1799,7 @@ io.on('connection', (socket) => {
       if (result.reason === 'not-enough-players') return error(`A rematch needs at least five connected players. Only ${result.available} are still here.`);
       return error('This table is not ready for a rematch.');
     }
+    room.matchId = randomUUID();
     const retainedIds = new Set(room.players.map((player) => player.id));
     for (const player of previousPlayers) {
       if (!retainedIds.has(player.id)) {
@@ -1962,7 +1965,9 @@ app.post('/api/voice-token', async (req, res) => {
     const allowedPhase = ['discussion', 'voting', 'tieVoting'].includes(room.phase)
       || (room.phase === 'night' && player.role === 'mafia' && roleIsActive(player, room));
     if (!allowedPhase) return res.status(403).json({ error: 'Voice chat is closed during this phase.' });
-    const voiceRoom = room.phase === 'night' ? `hollow-${room.code}-night-${room.round}` : `hollow-${room.code}-day-${room.round}`;
+    const voiceRoom = room.phase === 'night'
+      ? `hollow-${room.code}-${room.matchId || 'legacy'}-night-${room.round}`
+      : `hollow-${room.code}-${room.matchId || 'legacy'}-day-${room.round}`;
     const accessToken = new AccessToken(process.env.LIVEKIT_API_KEY, process.env.LIVEKIT_API_SECRET, {
       identity: player.id,
       name: player.name,
