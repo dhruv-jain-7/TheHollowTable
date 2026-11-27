@@ -16,7 +16,7 @@ const TUTORIAL_STEPS = [
   {
     label: '03 · WHEN DAY BREAKS',
     title: 'Discuss. Decide. Vote.',
-    body: 'Talk through what happened, then mark yourself ready or wait for the discussion clock. Cast a private vote. If the first vote ties, only the accused enter one final tie-break; a second tie eliminates nobody.',
+    body: 'Talk through what happened, then mark yourself ready or wait for the discussion clock. Cast a private vote. If the first vote ties, the players vote again between the tied accused; a second tie eliminates nobody.',
     note: 'In-Person players speak across the physical table. Online players can use text chat and optional voice.',
   },
   {
