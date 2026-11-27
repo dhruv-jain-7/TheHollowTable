@@ -56,9 +56,16 @@ export function allPlayersVoted(playerIds, votes) {
   return playerIds.length > 0 && playerIds.every((id) => typeof votes?.[id] === 'string');
 }
 
+/** Faction alignment applies immediately, even while an inherited role's actions are delayed. */
+export function isMafiaFactionMember(player) {
+  return player?.role === 'mafia';
+}
+
 export function getWinner(players) {
   const alive = players.filter((player) => player.alive);
-  const mafia = alive.filter((player) => player.role === 'mafia').length;
+  // Undertaker inheritance changes faction alignment immediately; only copied
+  // night actions are delayed until roleActiveFromRound.
+  const mafia = alive.filter(isMafiaFactionMember).length;
   const town = alive.length - mafia;
   if (mafia === 0) return 'town';
   if (mafia >= town) return 'mafia';

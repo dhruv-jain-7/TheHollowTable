@@ -1145,3 +1145,14 @@ h1, h2, h3, p { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
   .rules-modal-backdrop, .undertaker-reveal-overlay { animation-duration: .01ms !important; }
 }
+
+/* M7: everyone sees why the In-Person clock is waiting for its narrator. */
+.narrator-paused-banner {
+  display: grid; gap: 6px; margin: 0 0 18px; padding: 14px 17px;
+  border: 1px solid rgba(196, 91, 78, .48); border-left: 3px solid #bc554c;
+  border-radius: 10px; background: linear-gradient(110deg, rgba(91, 35, 34, .28), rgba(19, 15, 17, .82));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+}
+.narrator-paused-banner strong { color: #f0c2b0; font: 800 10px var(--mono); letter-spacing: .14em; }
+.narrator-paused-banner span { color: rgba(239, 222, 207, .78); font-size: 12px; line-height: 1.55; }
+@media (max-width: 620px) { .narrator-paused-banner { padding: 12px 13px; } .narrator-paused-banner span { font-size: 11px; } }

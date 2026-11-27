@@ -138,6 +138,8 @@ function RolePlayingCard({ card, faceUp = true, onFlip, compact = false }) {
 
 function App() {
   const [snapshot, setSnapshot] = useState(null);
+  const latestSnapshotRef = useRef(snapshot);
+  latestSnapshotRef.current = snapshot;
   const [session, setSession] = useState(() => {
     try { return JSON.parse(sessionStorage.getItem('hollow-table-session') || 'null'); }
     catch { return null; }
@@ -172,6 +174,7 @@ function App() {
   const lastNarratorIdRef = useRef('');
   const [narrationUnlocked, setNarrationUnlocked] = useState(false);
   const [narrationPlaybackError, setNarrationPlaybackError] = useState('');
+  const wakeLockRef = useRef(null);
 
   const flash = useCallback((message, isError = false) => {
     if (isError) setErrorMessage(message);
@@ -358,7 +361,7 @@ function App() {
   };
 
   const readyToVote = async () => {
-    const response = await request('day:ready');
+    const response = await request('day:ready', { ready: !Boolean(snapshot?.me?.readyToVote) });
     if (!response.ok) flash(response.error, true);
     else flash(response.ready ? 'You are marked ready for the vote.' : 'You are no longer marked ready.');
   };
@@ -488,6 +491,58 @@ function App() {
       }
     });
   }, [snapshot, narrationUnlocked]);
+
+  useEffect(() => {
+    if (snapshot?.gameMode !== 'in_person' || snapshot?.status !== 'playing') return undefined;
+    let disposed = false;
+    const requestScreenWakeLock = async () => {
+      if (disposed || document.visibilityState !== 'visible' || !navigator.wakeLock?.request) return;
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        wakeLockRef.current.addEventListener('release', () => {
+          if (!disposed && document.visibilityState === 'visible') void requestScreenWakeLock();
+        }, { once: true });
+      } catch {
+        // Wake Lock is optional; unsupported browsers continue without it.
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void requestScreenWakeLock();
+        return;
+      }
+      const currentSnapshot = latestSnapshotRef.current;
+      if (currentSnapshot?.me?.isNarrator) {
+        narrationUnlockedRef.current = false;
+        setNarrationUnlocked(false);
+        const missedCue = getNarrationCue(currentSnapshot);
+        if (missedCue) {
+          try {
+            const storageKey = `hollow-narration:${currentSnapshot.code}`;
+            if (sessionStorage.getItem(storageKey) === missedCue.key) sessionStorage.removeItem(storageKey);
+          } catch { /* Audio can still be re-enabled when session storage is unavailable. */ }
+        }
+        void request('narrator:visibility', { visible: false });
+      }
+    };
+    void requestScreenWakeLock();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      disposed = true;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (wakeLockRef.current) {
+        void wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    };
+  }, [snapshot?.code, snapshot?.gameMode, snapshot?.status, snapshot?.me?.isNarrator]);
+
+  useEffect(() => {
+    if (snapshot?.narratorPaused && snapshot?.me?.isNarrator) {
+      narrationUnlockedRef.current = false;
+      setNarrationUnlocked(false);
+    }
+  }, [snapshot?.narratorPaused, snapshot?.me?.isNarrator]);
 
   const copyCode = async () => {
     try {
@@ -1133,6 +1188,12 @@ function Game({ snapshot, countdown, selectedTarget, setSelectedTarget, actNight
               )}
             </div>
           )}
+        </div>
+      )}
+      {isInPerson && snapshot.narratorPaused && (
+        <div className="narrator-paused-banner" role="status" aria-live="polite">
+          <strong>THE VOICE OF THE HOUSE IS SILENT</strong>
+          <span>The game clock is paused. The assigned narrator must reconnect, return to this screen and enable the house voice before the night continues.</span>
         </div>
       )}
       <div className="game-topline">

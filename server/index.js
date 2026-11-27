@@ -8,6 +8,9 @@ import express from 'express';
 import helmet from 'helmet';
 import { Server } from 'socket.io';
 import { Pool } from 'pg';
+import { getDatabaseConnectionOptions } from './databaseConfig.js';
+import { cleanDisplayName, cleanChatText, displayNameSkeleton } from './identitySafety.js';
+import { migrateRoomState, roomExpiresAt, roomHasExpired, ROOM_SCHEMA_VERSION } from './roomPersistence.js';
 // HOLLOW_STAGE_4_5_IN_PERSON_NIGHT_FLOW: the server owns every In-Person phase transition.
 // HOLLOW_STAGE_8_UNDERTAKER_ROLE: a private, one-use identity transfer shared by both game modes.
 import {
@@ -29,6 +32,7 @@ import {
   resolveUndertakerChoice,
   toUndertakerPrivateOptions,
   isRoleActive,
+  hasPendingMafiaInheritance,
 } from './undertakerRules.js';
 import {
   getDiscussionSeconds,
@@ -39,6 +43,7 @@ import {
   allPlayersVoted,
   allPlayersReady,
   canTargetSelf,
+  isMafiaFactionMember,
 } from './rules.js';
 import {
   createBooleanReadinessCache,
@@ -46,6 +51,7 @@ import {
   createTokenBucket,
   runRoomBatchSafely,
   shiftRestoredRoomTimers,
+  reconcileNarratorClockPause,
 } from './runtimeSafety.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -95,6 +101,7 @@ let pool = null;
 let livekitRoomService = null;
 let lastDatabaseHeartbeatAt = 0;
 let roomTickTimer = null;
+let activeRoomTickPromise = null;
 let shuttingDown = false;
 const ROOM_SAVE_DEBOUNCE_MS = 350;
 const ROOM_SAVE_RETRY_MS = 2_000;
@@ -115,7 +122,6 @@ const NO_ELIMINATION_TRANSITION_MS = 10800;
 const MAFIA_CONFLICT_WINDOW_MS = 8000;
 const MAFIA_CONFLICT_EXTENSION_MS = 15000;
 const RECONNECT_GRACE_MS = 45_000;
-const ROOM_TTL_HOURS = 24;
 const IN_PERSON_PHASE_MINIMUM_SECONDS = Object.freeze({ discussion: 9, voting: 9, tieVoting: 9 });
 const IN_PERSON_TRANSITION_MINIMUM_MS = Object.freeze({ murder: 12_000, quiet: 10_000, elimination: 13_200, tie: 11_000, 'no-elimination': 11_000 });
 // HOLLOW_STAGE_6_NARRATOR_AUDIO: the In-Person mode is enabled only when the complete approved voice pack is present.
@@ -162,15 +168,6 @@ function makeCode() {
   return code;
 }
 
-function cleanName(value) {
-  if (typeof value !== 'string') return '';
-  return value.replace(/[<>\u0000-\u001F]/g, '').trim().replace(/\s+/g, ' ').slice(0, 18);
-}
-
-function cleanMessage(value) {
-  if (typeof value !== 'string') return '';
-  return value.replace(/[<>\u0000-\u001F]/g, '').trim().slice(0, 350);
-}
 
 function reply(callback, payload) {
   if (typeof callback === 'function') callback(payload);
@@ -216,6 +213,12 @@ function repairNarrator(room, force = false) {
   const host = playerById(room, room.hostId);
   const fallback = (host?.connected ? host : null) || room.players.find((player) => player.connected) || null;
   room.narratorId = fallback?.id ?? null;
+}
+
+function syncNarratorClockPause(room, now = Date.now()) {
+  const narrator = room?.gameMode === 'in_person' ? playerById(room, room.narratorId) : null;
+  const ready = Boolean(narrator?.connected && room.narratorReadyId === narrator.id);
+  return reconcileNarratorClockPause(room, ready, now);
 }
 
 function livingPlayers(room) {
@@ -441,6 +444,7 @@ function makeSnapshot(room, playerId) {
     voicePackReady: room.gameMode === 'in_person' ? isInPersonVoicePackReady() : false,
     clockQuarantined: Boolean(room.clockQuarantined),
     narratorAudioReady: room.gameMode === 'in_person' && Boolean(narrator && room.narratorReadyId === narrator.id),
+    narratorPaused: Boolean(room.narratorPausedAt),
     serverNow: Date.now(),
     status: room.status,
     hostId: room.hostId,
@@ -552,7 +556,8 @@ async function flushRoomSave(code) {
     while (entry.snapshot && pool) {
       const snapshot = entry.snapshot;
       entry.snapshot = null;
-      const expiresAt = new Date(Date.now() + ROOM_TTL_HOURS * 60 * 60 * 1000);
+      const savedRoom = JSON.parse(snapshot);
+      const expiresAt = roomExpiresAt(savedRoom);
       try {
         await pool.query(
           `INSERT INTO hollow_rooms (code, state, updated_at, expires_at)
@@ -588,7 +593,7 @@ async function saveRoom(room) {
       pendingRoomSaves.set(room.code, entry);
     }
     // Trailing debounce coalesces bursts; a running flush serializes any newer snapshot after the current write.
-    entry.snapshot = JSON.stringify(room);
+    entry.snapshot = JSON.stringify({ ...room, schemaVersion: ROOM_SCHEMA_VERSION });
     scheduleRoomSave(room.code);
   } catch (err) {
     console.error(`Could not queue room ${room.code} for persistence:`, err.message);
@@ -628,11 +633,9 @@ async function initializeDatabase() {
     console.warn('DATABASE_URL is not set. Room state will be in memory only.');
     return;
   }
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_SSL === 'disable' ? false : { rejectUnauthorized: false },
-    max: 5,
-  });
+  // M2: validate the server certificate by default. Local development can opt
+  // out with DATABASE_SSL=disable; a provider CA can be supplied when required.
+  pool = new Pool({ ...getDatabaseConnectionOptions(), max: 5 });
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hollow_rooms (
       code CHAR(4) PRIMARY KEY,
@@ -644,7 +647,7 @@ async function initializeDatabase() {
   `);
   const { rows } = await pool.query('SELECT state, updated_at FROM hollow_rooms WHERE expires_at > NOW()');
   for (const row of rows) {
-    const room = row.state;
+    const room = migrateRoomState(row.state);
     if (!room || !room.code || !Array.isArray(room.players)) continue;
     const restoredAt = Date.now();
     const downtimeMs = shiftRestoredRoomTimers(room, row.updated_at, restoredAt);
@@ -657,6 +660,7 @@ async function initializeDatabase() {
       ? (playerById(room, room.narratorId) ? room.narratorId : room.hostId)
       : null;
     room.narratorReadyId = null;
+    room.narratorPausedAt = room.status === 'playing' && room.gameMode === 'in_person' ? restoredAt : null;
     room.actions ??= freshActions();
     room.actions.undertakerDecision ??= null;
     room.settings ??= {};
@@ -726,6 +730,8 @@ function emitRoom(room) {
 }
 
 async function commit(room) {
+  syncNarratorClockPause(room);
+  room.schemaVersion = ROOM_SCHEMA_VERSION;
   room.lastActivityAt = Date.now();
   emitRoom(room);
   await saveRoom(room);
@@ -788,6 +794,13 @@ function reconcileInPersonDayProgress(room) {
   return false;
 }
 
+function reconcileDiscussionReadiness(room) {
+  if (room.status !== 'playing' || room.phase !== 'discussion' || !everyoneReady(room)) return false;
+  if (room.gameMode === 'in_person') return reconcileInPersonDayProgress(room);
+  beginVoting(room);
+  return true;
+}
+
 function beginVoting(room) {
   room.phase = 'voting';
   room.phaseMinUntil = room.gameMode === 'in_person' ? Date.now() + IN_PERSON_PHASE_MINIMUM_SECONDS.voting * 1000 : null;
@@ -805,6 +818,13 @@ function beginVoting(room) {
 
 function beginNextNight(room) {
   room.round += 1;
+  // An inherited faction becomes active on this round's opening. Check parity
+  // at activation, not at the earlier private inheritance choice.
+  const activatedWinner = getWinner(room.players);
+  if (activatedWinner) {
+    finishGame(room, activatedWinner);
+    return;
+  }
   room.phase = 'night';
   room.phaseMinUntil = null;
   room.actions = freshActions();
@@ -854,9 +874,15 @@ function checkVictory(room) {
 
 function reconcileAfterRosterChange(room) {
   const winner = getWinner(room.players);
-  if (winner) {
+  const pendingMafiaInheritance = hasPendingMafiaInheritance(room.players, room.round);
+  if (winner && !pendingMafiaInheritance) {
     finishGame(room, winner);
     return true;
+  }
+  if (winner && pendingMafiaInheritance) {
+    // Defer a roster-triggered win while a private Mafia inheritance is waiting
+    // for its next-round activation. End-of-night resolution handles the verdict.
+    return false;
   }
   if (room.phase === 'transition' && room.transition?.pendingWinner) {
     room.transition.pendingWinner = null;
@@ -1132,7 +1158,7 @@ async function quarantineRoomClock(room, err) {
 
 async function processRoomTick(room, now) {
   if (room.clockQuarantined) {
-    if (now - (room.lastActivityAt || room.createdAt || now) > ROOM_TTL_HOURS * 60 * 60 * 1000) {
+    if (roomHasExpired(room, now)) {
       await deleteRoom(room.code);
     }
     return;
@@ -1171,6 +1197,8 @@ async function processRoomTick(room, now) {
   if (changed && room.status === 'playing') {
     if (reconcileAfterRosterChange(room)) {
       // A disconnect can change the faction balance; publish the final verdict.
+    } else if (room.phase === 'discussion' && reconcileDiscussionReadiness(room)) {
+      // Removing/forfeiting a seat can leave every remaining living player ready.
     } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
       room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
       startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
@@ -1184,6 +1212,19 @@ async function processRoomTick(room, now) {
     if (nextHost) room.hostId = nextHost;
     room.hostGraceUntil = null;
     changed = true;
+  }
+
+  if (room.status === 'playing' && room.gameMode === 'in_person') {
+    const narratorPause = syncNarratorClockPause(room, now);
+    if (narratorPause.changed) changed = true;
+    if (room.narratorPausedAt) {
+      if (roomHasExpired(room, now)) {
+        await deleteRoom(room.code);
+        return;
+      }
+      if (changed) await commit(room);
+      return;
+    }
   }
 
   if (room.status === 'playing' && room.gameMode === 'in_person' && room.phase === 'night') {
@@ -1211,7 +1252,7 @@ async function processRoomTick(room, now) {
     changed = true;
   }
 
-  if (now - (room.lastActivityAt || room.createdAt || now) > ROOM_TTL_HOURS * 60 * 60 * 1000) {
+  if (roomHasExpired(room, now)) {
     await deleteRoom(room.code);
     return;
   }
@@ -1247,8 +1288,14 @@ const runRoomClockTick = createNonOverlappingTask(async () => {
 });
 
 async function tickRooms() {
-  if (shuttingDown) return;
-  return runRoomClockTick();
+  if (shuttingDown || activeRoomTickPromise) return;
+  const tickPromise = runRoomClockTick();
+  activeRoomTickPromise = tickPromise;
+  try {
+    return await tickPromise;
+  } finally {
+    if (activeRoomTickPromise === tickPromise) activeRoomTickPromise = null;
+  }
 }
 
 function ipAllowed(ip) {
@@ -1287,6 +1334,9 @@ function withPlayer(socket, callback, handler) {
       if (context.room.clockQuarantined && callback !== 'room:leave') {
         return reply(ack, error('This table was paused after a technical issue. Please create a new table.'));
       }
+      if (context.room.narratorPausedAt && ['identity:ready', 'night:act', 'night:undertaker', 'day:ready', 'day:vote'].includes(callback)) {
+        return reply(ack, error('The game clock is paused until the narrator reconnects and enables the house voice.'));
+      }
       const result = await handler(context.room, context.player, payload);
       reply(ack, result ?? success());
     } catch (err) {
@@ -1312,7 +1362,7 @@ io.on('connection', (socket) => {
       if (socket.data.code && socket.data.playerId) return reply(ack, error('Leave your current table before creating another.'));
       const ip = socket.handshake.address || 'unknown';
       if (!ipAllowed(ip)) return reply(ack, error('Too many room attempts. Please wait a few minutes and try again.'));
-      const name = cleanName(payload.name);
+      const name = cleanDisplayName(payload.name);
       const avatar = AVATAR_IDS.has(String(payload.avatar)) ? String(payload.avatar) : 'raven';
       const maxPlayers = Math.min(16, Math.max(5, Number(payload.maxPlayers) || 10));
       const gameMode = payload.gameMode === 'in_person' ? 'in_person' : 'online';
@@ -1324,6 +1374,8 @@ io.on('connection', (socket) => {
       const id = randomUUID();
       const token = randomBytes(32).toString('hex');
       const room = {
+        schemaVersion: ROOM_SCHEMA_VERSION,
+        narratorPausedAt: null,
         code,
         gameMode,
         createdAt: Date.now(),
@@ -1363,7 +1415,7 @@ io.on('connection', (socket) => {
       const ip = socket.handshake.address || 'unknown';
       if (!ipAllowed(ip)) return reply(ack, error('Too many join attempts. Please wait a few minutes and try again.'));
       const code = String(payload.code || '').trim().toUpperCase();
-      const name = cleanName(payload.name);
+      const name = cleanDisplayName(payload.name);
       let avatar = AVATAR_IDS.has(String(payload.avatar)) ? String(payload.avatar) : 'raven';
       if (!/^[A-HJ-NP-Z2-9]{4}$/.test(code)) return reply(ack, error('Enter a valid four-character table code.'));
       const room = rooms.get(code);
@@ -1375,7 +1427,8 @@ io.on('connection', (socket) => {
       if (room.status !== 'lobby') return reply(ack, error('This game has already started. New players cannot join.'));
       if (room.players.length >= room.settings.maxPlayers) return reply(ack, error('This table is full.'));
       if (name.length < 2) return reply(ack, error('Choose a nickname with at least two characters.'));
-      if (room.players.some((player) => player.name.toLowerCase() === name.toLowerCase())) return reply(ack, error('That nickname is already taken at this table.'));
+      const nameKey = displayNameSkeleton(name);
+      if (room.players.some((player) => displayNameSkeleton(player.name) === nameKey)) return reply(ack, error('That nickname is already taken at this table.'));
       if (room.players.some((player) => player.avatar === avatar)) {
         avatar = [...AVATAR_IDS].find((candidate) => !room.players.some((player) => player.avatar === candidate));
       }
@@ -1451,6 +1504,19 @@ io.on('connection', (socket) => {
     room.narratorReadyId = player.id;
     await commit(room);
     return success({ ready: true });
+  }));
+
+  socket.on('narrator:visibility', withPlayer(socket, 'narrator:visibility', async (room, player, payload) => {
+    if (room.gameMode !== 'in_person' || room.status !== 'playing') return error('Narrator visibility is only tracked during an In-Person game.');
+    if (room.narratorId !== player.id) return error('Only the assigned narrator device can update narrator visibility.');
+    if (payload.visible === false) {
+      room.narratorReadyId = null;
+      await commit(room);
+      return success({ paused: true, reenableRequired: true });
+    }
+    // Returning to the tab never auto-unlocks audio. The narrator must tap the
+    // speaker test again so mobile browsers can resume audio after backgrounding.
+    return success({ paused: Boolean(room.narratorPausedAt), reenableRequired: Boolean(room.narratorPausedAt) });
   }));
 
   socket.on('lobby:start', withPlayer(socket, 'lobby:start', async (room, player) => {
@@ -1557,7 +1623,7 @@ io.on('connection', (socket) => {
         if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
         if (target.id === player.id) return error('You cannot investigate yourself.');
         room.actions.sheriffTarget = target.id;
-        const isMafia = target.role === 'mafia' && roleIsActive(target, room);
+        const isMafia = isMafiaFactionMember(target);
         addPrivateResult(
           player,
           `${target.name} is ${isMafia ? 'MAFIA' : 'NOT MAFIA'}.`,
@@ -1579,7 +1645,7 @@ io.on('connection', (socket) => {
     } else if (player.role === 'sheriff') {
       if (room.actions.sheriffTarget) return error('Your investigation is already locked for this night.');
       room.actions.sheriffTarget = target.id;
-      const isMafia = target.role === 'mafia' && roleIsActive(target, room);
+      const isMafia = isMafiaFactionMember(target);
       addPrivateResult(
         player,
         `${target.name} is ${isMafia ? 'MAFIA' : 'NOT MAFIA'}.`,
@@ -1646,14 +1712,16 @@ io.on('connection', (socket) => {
     if (room.status !== 'playing' || room.phase !== 'discussion') return error('The discussion phase is closed.');
     if (!player.alive) return error('Ghosts cannot ready the vote.');
     room.actions.dayReady ??= {};
-    const ready = !Boolean(room.actions.dayReady[player.id]);
+    // Explicit desired state makes retries idempotent. The no-payload fallback
+    // preserves compatibility with clients that still send the older toggle.
+    const ready = typeof payload.ready === 'boolean'
+      ? payload.ready
+      : !Boolean(room.actions.dayReady[player.id]);
     if (ready) room.actions.dayReady[player.id] = true;
     else delete room.actions.dayReady[player.id];
     const living = votingPlayers(room);
     const readyCount = living.filter((member) => room.actions.dayReady[member.id]).length;
-    // In-Person disconnected seats cannot press Ready; they do not hold the table open.
-    const started = living.length > 0 && readyCount === living.length;
-    if (started) beginVoting(room);
+    const started = reconcileDiscussionReadiness(room);
     await commit(room);
     return success({ ready, readyCount, required: living.length, started });
   }));
@@ -1695,6 +1763,7 @@ io.on('connection', (socket) => {
         reconcileInPersonNightProgress(room);
         reconcileInPersonDayProgress(room);
       }
+      if (!wonByRosterChange && room.phase === 'discussion') reconcileDiscussionReadiness(room);
       if (!wonByRosterChange && room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
         room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
         startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
@@ -1722,7 +1791,7 @@ io.on('connection', (socket) => {
   socket.on('chat:send', withPlayer(socket, 'chat:send', async (room, player, payload) => {
     if (room.gameMode === 'in_person') return error('In-Person players speak at the physical table; phone chat is disabled.');
     if (!player.alive) return error('The dead cannot speak at the table.');
-    const text = cleanMessage(payload.text);
+    const text = cleanChatText(payload.text);
     if (!text) return error('Write a message before sending.');
     if (!chatAllowed(player.id)) return error('Slow down. The house is listening.');
     let scope = 'public';
@@ -1773,9 +1842,11 @@ io.on('connection', (socket) => {
       if (room.gameMode === 'in_person' && room.narratorId === player.id) { room.narratorReadyId = null; room.narratorId = null; repairNarrator(room, true); }
       if (reconcileAfterRosterChange(room)) {
         // The departure itself may decide the game.
+      } else if (room.phase === 'discussion' && reconcileDiscussionReadiness(room)) {
+        // All remaining living players had already confirmed they were ready.
       } else if (room.phase === 'tieVoting' && room.tieCandidates.length === 0) {
-        beginNextNight(room);
         room.announcement = makeAnnouncement('no-elimination', 'THE ACCUSED HAVE VANISHED', 'The tie dissolved. No one was eliminated.', 'muted');
+        startTransition(room, 'no-elimination', NO_ELIMINATION_TRANSITION_MS, 'night');
       } else if (['voting', 'tieVoting'].includes(room.phase) && everyoneVoted(room)) {
         resolveDayVoting(room, room.phase === 'tieVoting');
       }
@@ -1848,6 +1919,8 @@ async function gracefulShutdown(signal) {
   shuttingDown = true;
   console.log(`${signal} received. Saving active tables before shutdown.`);
   if (roomTickTimer) clearInterval(roomTickTimer);
+  // Do not snapshot rooms while a previously-started tick is still mutating them.
+  if (activeRoomTickPromise) await activeRoomTickPromise;
 
   const now = Date.now();
   for (const room of rooms.values()) {

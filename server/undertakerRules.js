@@ -50,3 +50,12 @@ export function resolveUndertakerChoice(player, target, round) {
     used: true,
   };
 }
+
+
+/** A living inherited Mafia identity waits until its next round before actions activate. */
+export function hasPendingMafiaInheritance(players, round) {
+  const currentRound = Number(round || 0);
+  return (Array.isArray(players) ? players : []).some((player) => player?.alive
+    && player.role === 'mafia'
+    && Number(player.roleActiveFromRound || 1) > currentRound);
+}

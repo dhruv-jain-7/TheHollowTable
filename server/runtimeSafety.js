@@ -76,3 +76,33 @@ export function createBooleanReadinessCache(check) {
     },
   };
 }
+
+/** Pause an In-Person room while its assigned narrator cannot speak, then
+ * extend every absolute game deadline by the exact pause duration on recovery. */
+export function reconcileNarratorClockPause(room, narratorReady, now = Date.now()) {
+  if (!room || typeof room !== 'object' || !Number.isFinite(now)) {
+    return { changed: false, paused: false, resumedMs: 0 };
+  }
+  if (room.status !== 'playing' || room.gameMode !== 'in_person') {
+    if (Number.isFinite(room.narratorPausedAt)) {
+      // Pauses are only meaningful while an In-Person game is actively running.
+      // Lobby/finished room deadlines must not be extended by a stale marker.
+      room.narratorPausedAt = null;
+      return { changed: true, paused: false, resumedMs: 0 };
+    }
+    return { changed: false, paused: false, resumedMs: 0 };
+  }
+  if (!narratorReady) {
+    if (!Number.isFinite(room.narratorPausedAt)) {
+      room.narratorPausedAt = now;
+      return { changed: true, paused: true, resumedMs: 0 };
+    }
+    return { changed: false, paused: true, resumedMs: 0 };
+  }
+  if (Number.isFinite(room.narratorPausedAt)) {
+    const resumedMs = shiftRestoredRoomTimers(room, room.narratorPausedAt, now);
+    room.narratorPausedAt = null;
+    return { changed: true, paused: false, resumedMs };
+  }
+  return { changed: false, paused: false, resumedMs: 0 };
+}

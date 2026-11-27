@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getWinner, isMafiaFactionMember } from './rules.js';
 import {
   UNDERTAKER_MAX_PER_GAME,
   UNDERTAKER_RECOMMENDED_MIN_PLAYERS,
@@ -8,6 +9,7 @@ import {
   canUndertakerAct,
   resolveUndertakerChoice,
   toUndertakerPrivateOptions,
+  hasPendingMafiaInheritance,
 } from './undertakerRules.js';
 
 const undertaker = (overrides = {}) => ({ id: 'u', role: 'undertaker', alive: true, undertakerUsed: false, ...overrides });
@@ -89,4 +91,31 @@ test('graveyard options sent to the Undertaker omit the inherited role', () => {
   ]);
   assert.deepEqual(options, [{ id: 'dead-1', name: 'Raven', avatar: 'raven' }]);
   assert.equal(Object.hasOwn(options[0], 'role'), false);
+});
+
+
+test('inherited Mafia counts toward faction parity immediately while copied night abilities wait until next round', () => {
+  const inherited = { id: 'new-mafia', role: 'mafia', alive: true, roleActiveFromRound: 3 };
+  const citizen = { id: 'town', role: 'citizen', alive: true, roleActiveFromRound: 1 };
+  assert.equal(isRoleActive(inherited, 2), false);
+  assert.equal(getWinner([inherited, citizen]), 'mafia');
+});
+
+
+test('Sheriff faction reading sees an inherited Mafia immediately, before its night ability activates', () => {
+  const inherited = { id: 'copied', role: 'mafia', alive: true, roleActiveFromRound: 3 };
+  assert.equal(isRoleActive(inherited, 2), false);
+  assert.equal(isMafiaFactionMember(inherited), true);
+});
+
+test('roster-change victory deferral applies only while a copied Mafia is alive and awaiting activation', () => {
+  assert.equal(hasPendingMafiaInheritance([
+    { role: 'mafia', alive: true, roleActiveFromRound: 3 },
+  ], 2), true);
+  assert.equal(hasPendingMafiaInheritance([
+    { role: 'mafia', alive: false, roleActiveFromRound: 3 },
+  ], 2), false);
+  assert.equal(hasPendingMafiaInheritance([
+    { role: 'mafia', alive: true, roleActiveFromRound: 2 },
+  ], 2), false);
 });

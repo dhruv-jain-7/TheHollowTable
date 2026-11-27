@@ -28,8 +28,11 @@ export const IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS = Object.freeze({
   mafia_sleep: 2,
   angel_sleep: 2,
   sheriff_sleep: 2,
-  mafia: 11,
-  mafia_clash: 11,
+  // Town wake is close to the longest public narration clip; leave two seconds of headroom.
+  town_wake: 2,
+  // A fixed floor reduces timing clues about how many Mafia players are present.
+  mafia: 18,
+  mafia_clash: 18,
   angel: 11,
   sheriff: 10,
   undertaker: 10,

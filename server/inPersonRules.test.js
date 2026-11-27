@@ -23,6 +23,9 @@ test('In-Person action windows are bounded and match the table sequence', () => 
   assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.mafia_sleep, 2);
   assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.angel_sleep, 2);
   assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.sheriff_sleep, 2);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.town_wake, 2);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.mafia, 18);
+  assert.equal(IN_PERSON_NIGHT_STEP_MINIMUM_SECONDS.mafia_clash, 18);
   assert.equal(IN_PERSON_NIGHT_STEP_SECONDS.role_reveal, 45);
   assert.equal(IN_PERSON_VOTE_SECONDS, 30);
 });

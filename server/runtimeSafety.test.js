@@ -5,6 +5,7 @@ import {
   createNonOverlappingTask,
   createTokenBucket,
   runRoomBatchSafely,
+  reconcileNarratorClockPause,
   shiftRestoredRoomTimers,
 } from './runtimeSafety.js';
 
@@ -94,4 +95,28 @@ test('narrator readiness cache checks files only when refreshed', () => {
   assert.equal(cache.read(), true);
   assert.equal(cache.refresh(), false);
   assert.equal(checks, 2);
+});
+
+
+test('In-Person room clock pauses while narrator is unavailable and resumes with deadlines preserved', () => {
+  const room = {
+    status: 'playing', gameMode: 'in_person', narratorPausedAt: null,
+    phaseEndsAt: 50_000, phaseMinUntil: 20_000, nightStepMinUntil: 18_000,
+    transition: { startedAt: 10_000, durationMs: 5_000 },
+  };
+  assert.deepEqual(reconcileNarratorClockPause(room, false, 12_000), { changed: true, paused: true, resumedMs: 0 });
+  assert.equal(room.narratorPausedAt, 12_000);
+  assert.deepEqual(reconcileNarratorClockPause(room, false, 20_000), { changed: false, paused: true, resumedMs: 0 });
+  assert.deepEqual(reconcileNarratorClockPause(room, true, 25_000), { changed: true, paused: false, resumedMs: 13_000 });
+  assert.equal(room.phaseEndsAt, 63_000);
+  assert.equal(room.phaseMinUntil, 33_000);
+  assert.equal(room.nightStepMinUntil, 31_000);
+  assert.equal(room.transition.startedAt, 23_000);
+  assert.equal(room.narratorPausedAt, null);
+});
+
+test('rooms outside active In-Person play do not retain narrator pause state', () => {
+  const room = { status: 'lobby', gameMode: 'in_person', narratorPausedAt: 10_000, phaseEndsAt: null };
+  assert.deepEqual(reconcileNarratorClockPause(room, false, 15_000), { changed: true, paused: false, resumedMs: 0 });
+  assert.equal(room.narratorPausedAt, null);
 });
