@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { prepareRoomRematch } from './rematchRules.js';
 
 function fixture(mode = 'online') {
-  const players = Array.from({ length: 6 }, (_, i) => ({
+  const players = Array.from({ length: 7 }, (_, i) => ({
     id: `p${i + 1}`, name: `Player ${i + 1}`, connected: true,
     tokenHash: `hash-${i + 1}`, role: i === 0 ? 'mafia' : 'citizen',
     alive: i !== 1, disconnectAt: null, privateResults: [{ id: 'private' }],
