@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { request, socket } from './socket.js';
-const VoiceRoom = lazy(() => import('./components/VoiceRoom.jsx'));
-const InviteTools = lazy(() => import('./components/InviteTools.jsx'));
 import ExperienceTutorial from './components/ExperienceTutorial.jsx';
 import { getNarrationCue } from './audio/narration.js';
+
+const VoiceRoom = lazy(() => import('./components/VoiceRoom.jsx'));
+const InviteTools = lazy(() => import('./components/InviteTools.jsx'));
 
 // HOLLOW_STAGE_6_NARRATOR_AUDIO: one unlocked narrator device plays the shared static voice pack.
 // HOLLOW_STAGE_8_UNDERTAKER_ROLE: private one-use inheritance and the in-game role guide.
