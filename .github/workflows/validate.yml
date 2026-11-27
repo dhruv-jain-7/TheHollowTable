@@ -19,6 +19,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm install --include=dev
+      - name: Check server module syntax
+        run: |
+          node --check server/index.js
+          node --check server/rematchRules.js
       - name: Run automated tests
         run: npm test
       - name: Build production client
