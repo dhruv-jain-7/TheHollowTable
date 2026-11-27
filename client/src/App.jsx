@@ -284,9 +284,9 @@ function App() {
 
   useEffect(() => {
     if (!snapshot) return;
-    const key = `${snapshot.status}:${snapshot.round}:${snapshot.phase}:${snapshot.nightStep || ''}:${snapshot.announcement?.kind || ''}`;
+    const key = `${snapshot.status}:${snapshot.round}:${snapshot.phase}:${snapshot.nightStep || ''}:${snapshot.announcement?.id || ''}`;
     if (lastHapticKey.current && key !== lastHapticKey.current && hapticsEnabled && typeof navigator.vibrate === 'function') {
-      const dramatic = ['murder', 'elimination', 'victory'].includes(snapshot.announcement?.kind);
+      const dramatic = snapshot.status === 'finished' || ['murder', 'elimination', 'victory'].includes(snapshot.announcement?.kind);
       navigator.vibrate(dramatic ? [55, 35, 55] : 24);
     }
     lastHapticKey.current = key;
