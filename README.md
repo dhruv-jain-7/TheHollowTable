@@ -89,7 +89,7 @@ The app uses one Node process and the Socket.IO in-memory adapter. Do not scale 
 - Mafia selects a single target through private team voting. The most-selected living target is murdered; if Mafia votes are tied, the murder fails. A Mafia member may target another Mafia member; a player cannot target themselves.
 - The Angel's protection prevents the murder if the protected player is the selected target. The Angel may protect themselves. Mafia may target another Mafia member, but not themselves.
 - Sheriff results are private and report `MAFIA` or `NOT MAFIA`.
-- The Undertaker may inherit an eligible eliminated role once. The inherited role becomes active at the opening of the following night; faction balance, Sheriff results, and copied night abilities use the inherited identity from that point.
+- The Undertaker may inherit an eligible eliminated role once. The inherited faction alignment applies immediately to victory-balance checks and Sheriff investigation results; copied night abilities become usable from the following night.
 - Day votes are private. If the leading vote count is tied, a five-minute re-vote opens between the tied candidates only. If that second vote is tied, nobody is eliminated.
 - Town wins when all Mafia are gone. Mafia wins when living Mafia equal or outnumber all other living players.
 - Leaving during an active game forfeits that seat; disconnected players can still reconnect, while a deliberate leave removes the player from the living count.
