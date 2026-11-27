@@ -166,7 +166,7 @@ function App() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [tutorialOpen, setTutorialOpen] = useState(() => { try { return localStorage.getItem('hollow-tutorial-seen') !== 'yes'; } catch { return false; } });
   const [hapticsEnabled, setHapticsEnabled] = useState(() => { try { return localStorage.getItem('hollow-haptics') !== 'off'; } catch { return true; } });
-  const [narratorVolume, setNarratorVolume] = useState(() => { try { const value = Number(localStorage.getItem('hollow-narrator-volume')); return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1; } catch { return 1; } });
+  const [narratorVolume, setNarratorVolume] = useState(() => { try { const stored = localStorage.getItem('hollow-narrator-volume'); if (stored === null) return 1; const value = Number(stored); return Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1; } catch { return 1; } });
   const [installPrompt, setInstallPrompt] = useState(null);
   const chatEndRef = useRef(null);
   const lastResumeKey = useRef('');
